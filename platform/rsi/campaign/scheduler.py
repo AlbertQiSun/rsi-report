@@ -613,7 +613,7 @@ class MuarArmStep(Step):
         # launch within the shared CPU pool
         if self.st.get("stop_requested") is None and not self.c.outage and not self.c.paused:
             for sub in subs.values():
-                if self.c.muar_free() <= 0:
+                if self.c.muar_free() <= 0 or self.c.muar_blocked_by_earlier(self):
                     break
                 if sub["status"] == "pending":
                     path = self.sub_config(sub)
@@ -1452,6 +1452,17 @@ class Campaign:
         except Exception as e:  # noqa: BLE001
             self.error(step.id, f"start failed: {e}\n{traceback.format_exc()[-800:]}")
             step.set("failed", f"start failed: {e}")
+
+    def muar_blocked_by_earlier(self, step) -> bool:
+        """Pool priority = yaml order: a µAR arm may not take a free slot while an earlier arm still has pending
+        sub-runs (otherwise every arm refills its own finished slots and later arms keep the pool forever)."""
+        for s in self.steps.values():
+            if s is step:
+                return False
+            if isinstance(s, MuarArmStep) and s.status == "running" and s.st.get("stop_requested") is None \
+                    and any(x["status"] == "pending" for x in s.subs().values()):
+                return True
+        return False
 
     def muar_free(self) -> int:
         cap = int(self.cfg["muar"]["cpu_workers"])
