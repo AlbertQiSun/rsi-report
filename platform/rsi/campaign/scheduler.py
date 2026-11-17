@@ -942,6 +942,8 @@ class DecisionStep(Step):
             return
         cfg = self.cfg
         n_boot = int(self.c.cfg.get("analysis", {}).get("n_boot", 2000))
+        if self.c.dry:
+            n_boot = min(n_boot, int((self.c.cfg.get("dry_run") or {}).get("n_boot", 300)))
         arm, base = self.table(cfg["arm"]), self.table(cfg["base"])
         aa = None
         if cfg.get("aa"):

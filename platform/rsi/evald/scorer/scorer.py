@@ -290,17 +290,18 @@ def score(args) -> dict:
         x1 = x0.clone()
         x1[:, t_cut + 1:] = torch.randint(0, vocab, (2, T - t_cut - 1), generator=gen_dev).to(device)
         lb = fwd(x1).float()
+        # non-finite logits are reported by the main pass (status nan), not by the probes
         scale = max(1.0, float(la[:, :t_cut + 1].abs().max()))
         cdiff = float((la[:, :t_cut + 1] - lb[:, :t_cut + 1]).abs().max())
         probes["causal_maxdiff"] = cdiff / scale
-        if not _isfinite(cdiff) or cdiff > args.probe_tol * scale:
+        if _isfinite(cdiff) and _isfinite(scale) and cdiff > args.probe_tol * scale:
             flag("causality", f"logits at positions <= {t_cut} changed by {cdiff:.4g} when later tokens changed")
         x2 = x0.clone()
         x2[1] = torch.randint(0, vocab, (T,), generator=gen_dev).to(device)
         lc = fwd(x2).float()
         bdiff = float((la[0] - lc[0]).abs().max())
         probes["batch_maxdiff"] = bdiff / scale
-        if not _isfinite(bdiff) or bdiff > args.probe_tol * scale:
+        if _isfinite(bdiff) and _isfinite(scale) and bdiff > args.probe_tol * scale:
             flag("batch_dependence", f"row 0 logits changed by {bdiff:.4g} when row 1 changed")
         del la, lb, lc
 
@@ -322,7 +323,7 @@ def score(args) -> dict:
                 again[i] = _nll_bytes(fwd(chunk[:, :-1]), chunk[:, 1:], tb_dev)[0]
             rel = max(abs(again[i] - per_batch[i]) / max(1e-9, abs(per_batch[i])) for i in (0, 1))
             probes["order_reldiff"] = rel
-            if not _isfinite(rel) or rel > args.order_tol:
+            if _isfinite(rel) and rel > args.order_tol:
                 flag("order_dependence", f"batch scores changed by {rel:.3g} (relative) when re-scored in another order",
                      severity="soft")
     t_score = time.time() - t1

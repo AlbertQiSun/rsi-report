@@ -104,7 +104,13 @@ def summarize_runs(run_dirs: list[str], heldout: list[str] | None = None) -> str
 
 # ---------------------------------------------------------------------------- gateway call
 def _token(token_path: str | None) -> str | None:
-    p = token_path or os.environ.get("RSI_TOKEN_PATH") or os.path.join(os.environ.get("RSI_ROOT", ""), "run", "token")
+    p = token_path or os.environ.get("RSI_TOKEN_PATH")
+    if not p:
+        try:
+            from rsi.gateway.ports import default_token_path   # worker C: $RSI_TOKEN_FILE or $R/run/token
+            p = default_token_path()
+        except ImportError:
+            p = os.path.join(os.environ.get("R") or os.environ.get("RSI_ROOT", ""), "run", "token")
     try:
         with open(p) as f:
             return f.read().strip() or None

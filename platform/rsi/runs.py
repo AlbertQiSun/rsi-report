@@ -67,14 +67,27 @@ def append_jsonl(path: str, obj: Any) -> None:
 
 
 def read_jsonl(path: str) -> list[dict]:
+    """Read a JSONL file that other threads/processes may be appending to.
+
+    A trailing line without a newline (a concurrent append in progress) is ignored; a malformed
+    complete line is still an error.
+    """
     if not os.path.exists(path):
         return []
+    with open(path, "rb") as f:
+        data = f.read()
+    lines = data.split(b"\n")
+    complete, tail = lines[:-1], lines[-1]
     out = []
-    with open(path) as f:
-        for line in f:
-            line = line.strip()
-            if line:
-                out.append(json.loads(line))
+    for line in complete:
+        line = line.strip()
+        if line:
+            out.append(json.loads(line))
+    if tail.strip():
+        try:
+            out.append(json.loads(tail))
+        except json.JSONDecodeError:
+            pass  # torn write in progress
     return out
 
 

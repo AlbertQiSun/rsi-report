@@ -30,7 +30,7 @@ from statistics import mean
 from rsi import events
 from rsi.evald import audit
 from rsi.evald.channel import FifoReader
-from rsi.evald.config import GUARD_DIR, NANOCHAT_LIB_DIR, PKG_DIR, SCORER_DIR, EvaldConfig
+from rsi.evald.config import GUARD_DIR, NANOCHAT_LIB_DIR, SCORER_DIR, EvaldConfig
 from rsi.evald.honeypot import Honeypots
 from rsi.evald.sandbox import Mount, SandboxSpec, gpu_compute_pids, gpu_info, make_launcher, run_limited
 from rsi.runs import append_jsonl, artifact_hash, atomic_write_json, read_json
@@ -437,11 +437,12 @@ class EvalService:
         d = list(cfg.deny_paths)
         for split in cfg.splits.values():
             d.append(cfg.split_dir(split))
-        d += [os.path.join(cfg.scratch_dir, "hf_template"), "/opt/rsi/guard", "/opt/rsi/chan"]
+        # (never a sys.path entry such as /opt/rsi/guard: the import system lists those)
+        d += [os.path.join(cfg.scratch_dir, "hf_template"), "/opt/rsi/chan"]
         if role == "train":
             d += [cfg.state_dir, os.path.join(cfg.scratch_dir, "cache")]
             if cfg.sandbox == "none":
-                d += [PKG_DIR]
+                d += [SCORER_DIR]
         return d
 
     def _wait_gpu_idle(self, gpu) -> list[int]:

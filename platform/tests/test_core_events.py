@@ -96,3 +96,13 @@ def test_artifact_store_roundtrip(tmp_path):
     st.checkout(h, str(ws))
     assert (ws / "train.py").read_text() == "x = 1\n"
     assert diff_stat({"train.py": b"a\nb\n"}, {"train.py": b"a\nc\nd\n"}) == {"files": 1, "plus": 2, "minus": 1}
+
+
+def test_read_jsonl_ignores_torn_tail(tmp_path):
+    from rsi.runs import read_jsonl
+
+    p = tmp_path / "l.jsonl"
+    p.write_text('{"trial": 1}\n{"trial": 2, "sta')
+    assert read_jsonl(str(p)) == [{"trial": 1}]
+    p.write_text('{"trial": 1}\n{"trial": 2}')  # complete last line without newline
+    assert read_jsonl(str(p)) == [{"trial": 1}, {"trial": 2}]

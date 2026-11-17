@@ -47,7 +47,7 @@ import time
 from typing import Any, Callable
 
 from rsi.policies.base import Policy
-from rsi.runs import atomic_write_json, diff_stat, snapshot_files, stable_hash, unified_diff
+from rsi.runs import diff_stat, snapshot_files, unified_diff
 
 ORCH = "orchestrator"
 OK = "ok"
@@ -134,7 +134,7 @@ def merge3(base: list[str], a: list[str], b: list[str]) -> list[str] | None:
         for pc, psrc in kept:
             if psrc == src:
                 continue
-            (p1, p2, prep), (i1, i2, rep) = pc, c
+            (p1, p2, _), (i1, i2, _) = pc, c
             if (i1 < p2 and p1 < i2) or i1 == p1 or (i1 == p2 and (i1 == i2 or p1 == p2)) \
                     or (p1 == i2 and (p1 == p2 or i1 == i2)):
                 clash = pc

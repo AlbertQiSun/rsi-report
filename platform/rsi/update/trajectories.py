@@ -1,13 +1,15 @@
 """Readers for a run directory: gateway trajectories, ledger, run task / meta.
 
-Gateway record format (worker C). The reader is tolerant; per JSONL line it looks for
+Gateway record format (worker C, rsi/gateway/server.py Gateway.record). Tolerant; per JSONL line:
   request messages : rec["request"]["messages"] | rec["body"]["messages"] | rec["messages"]
   tools            : rec["request"]["tools"] | rec["tools"]
-  response message : rec["response"]["choices"][0]["message"] | rec["response_message"] | rec["completion"]
+  response message : rec["response"]["message"] (rsi.gateway) | rec["response"]["choices"][0]["message"]
+                     | rec["response_message"] | rec["completion"]
   tags             : run / agent / gen / trial at top level, or in rec["meta"] / rec["tags"],
                      or as X-RSI-* entries in rec["headers"]
   time             : rec["t"] | rec["ts"] | rec["time"]
-  failure          : rec["status"] (HTTP code) >= 400 or rec["error"] -> skipped
+  failure          : rec["status"] != "ok" (string) or an int >= 400, rec["http_status"] >= 400,
+                     or rec["error"] -> skipped (streams cut by the client are not training data)
 Files: runs/<id>/trajectories/gateway/**/*.jsonl (and *.jsonl.gz is not supported on purpose).
 """
 
@@ -61,8 +63,10 @@ def _int(v) -> int | None:
 
 
 def parse_record(rec: dict, source: str = "") -> Call | None:
-    status = rec.get("status") or rec.get("http_status")
-    if rec.get("error") or (isinstance(status, int) and status >= 400):
+    status, http = rec.get("status"), rec.get("http_status")
+    if rec.get("error") or (isinstance(http, int) and http >= 400) or (isinstance(status, int) and status >= 400):
+        return None
+    if isinstance(status, str) and status != "ok":      # gateway: ok | http_<n> | client_disconnected | ...
         return None
     req = rec.get("request") or rec.get("body") or rec
     if not isinstance(req, dict):
@@ -74,6 +78,8 @@ def parse_record(rec: dict, source: str = "") -> Call | None:
     msg = None
     if isinstance(resp, dict) and isinstance(resp.get("choices"), list) and resp["choices"]:
         msg = resp["choices"][0].get("message")
+    elif isinstance(resp, dict) and isinstance(resp.get("message"), dict):   # rsi.gateway: {message, finish_reason}
+        msg = resp["message"]
     msg = msg or rec.get("response_message") or rec.get("completion")
     if isinstance(msg, str):
         msg = {"role": "assistant", "content": msg}

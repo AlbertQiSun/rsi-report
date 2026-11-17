@@ -84,6 +84,7 @@ dry_run:                     # --dry-run only: fake components, compressed clock
   time_scale: 2000           # 1 real s = 2000 virtual s: the whole 41-h plan replays in ≈75 s
   muar_tasks_per_split: 2    # (fake sub-runs cost ≈0.25 real s each; the full fan-out would outrun the clock)
   muar_seeds: 2
+  n_boot: 300
 
 flags:                       # defaults; gates and decisions flip them
   nanochat: true             # G1a/G1c: NanoChat usable at all

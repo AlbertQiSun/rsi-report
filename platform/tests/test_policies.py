@@ -85,7 +85,7 @@ def stub_update(monkeypatch):
 from rsi import events  # noqa: E402
 from rsi.context import RunContext  # noqa: E402
 from rsi.tasks.base import Task, register  # noqa: E402
-from rsi.policies.naive_trial_ledger import NaiveTrialLedger, merge3  # noqa: E402
+from rsi.policies.naive_trial_ledger import NaiveTrialLedger, effective_cfg, merge3  # noqa: E402
 from rsi.policies.recursive_first_steps import RecursiveFirstSteps  # noqa: E402
 from rsi.policies.apex_ai4ai import ApexAI4AI  # noqa: E402
 from rsi.policies.self_evolution import SelfEvolution, run_arm  # noqa: E402
@@ -422,7 +422,7 @@ def test_recursive_end_to_end_with_crash_resume(tmp_path):
                     if r.get("confirm_seeds") and r.get("status") in ("adopted", "rejected")]
     assert confirm_lens and confirm_lens[0] == 2 and max(confirm_lens) > 2
     pol = RecursiveFirstSteps(REC_CFG)
-    pol.cfg = dict(RecursiveFirstSteps.DEFAULTS, confirm=REC_CFG["confirm"])
+    pol.cfg = effective_cfg(RecursiveFirstSteps.DEFAULTS, None, REC_CFG)
     assert [len(pol._confirm_seeds({"n_impr": n})) for n in range(6)] == [2, 3, 4, 5, 5, 5]
     # no adopted artifact uses the cache hack (sealed gap check caught it)
     adopted = [r for r in ctx2.ledger.trials().values() if r.get("status") == "adopted"]

@@ -90,7 +90,8 @@ srun --jobid=<jobid> --overlap --ntasks=1 -N1 --gres=gpu:a100:2 \
   print(u, c.models()); print(c.chat(\"ladder-27b\", [{\"role\":\"user\",\"content\":\"Say OK.\"}], max_tokens=512)[\"choices\"][0][\"message\"])"'
   ```
   Expected: `http://<ip>:45120 ['ladder-27b']`, then a message dict. Also check that an unauthenticated request is
-  refused: `curl -s -o /dev/null -w '%{http_code}\n' -X POST http://<ip>:<p3>/invocations` should print `401`.
+  refused: `curl -s -o /dev/null -w '%{http_code}\n' http://<ip>:<p3>/v1/models` should print `401`, and
+  `curl -s -o /dev/null -w '%{http_code}\n' -X POST http://<ip>:<p3>/invocations` should print `404` (never `200`).
 - To run the 27B on <node> GPU2 instead (the original ladder plan): `bundle/serve_vllm.sh 27b 2` (TP=1, 65536 ctx,
   0.92 util). That writes `"ladder-27b": "http://127.0.0.1:<p>"` and replaces the remote URL.
 
