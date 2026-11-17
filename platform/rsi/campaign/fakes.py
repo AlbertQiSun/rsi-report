@@ -188,8 +188,9 @@ def fake_orchestrator(args: argparse.Namespace) -> int:
     if "@" in model and model.split("@", 1)[1] not in loaded_adapters(fd):
         print(f"fake orchestrator: adapter for {model} not loaded", file=sys.stderr)
         return 4
-    if model == "ladder-27b" and not os.path.exists(os.path.join(fd, "up_vllm_27b")):
-        print("fake orchestrator: 27B server not up", file=sys.stderr)
+    needs_up = fake.get("needs_up")
+    if needs_up and not os.path.exists(os.path.join(fd, f"up_{needs_up}")):
+        print(f"fake orchestrator: service {needs_up} not up", file=sys.stderr)
         return 4
 
     prior = [e for e in events.read_events(rd.events)] if os.path.exists(rd.events) else []

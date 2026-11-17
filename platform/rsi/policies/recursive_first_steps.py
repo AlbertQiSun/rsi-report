@@ -252,7 +252,7 @@ class RecursiveFirstSteps(Policy):
         th = st["threads"][tid]
         lane = kit.lane_for(idx)
         screen = list(cfg.get("screen_seeds") or ctx.task.dev_seeds)
-        t = kit.new_trial()
+        t = kit.new_trial(kind="thread", thread=tid, round=rnd)
         parent_hash = th["best_hash"]
         ws = kit.ws(tid)
         kit.checkout(parent_hash, ws)
@@ -344,7 +344,7 @@ class RecursiveFirstSteps(Policy):
         a, b = ranked[:2]
         agent = "merger"
         kit.spawn(agent, "subagent", parent=ORCH)
-        t = kit.new_trial()
+        t = kit.new_trial(kind="combine", thread="merge", round=rnd)
         fb, fa, fbb = kit.files(st["base"]), kit.files(a), kit.files(b)
         merged: dict[str, bytes] | None = {}
         for name in sorted(set(fb) | set(fa) | set(fbb)):

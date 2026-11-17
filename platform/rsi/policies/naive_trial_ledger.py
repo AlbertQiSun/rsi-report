@@ -180,14 +180,19 @@ class PolicyKit:
         rec.setdefault("policy", self.policy)
         return self.ctx.ledger.append(**rec)
 
-    def new_trial(self) -> int:
+    TAGS = ("kind", "thread", "unit", "round", "researcher", "rep")
+
+    def new_trial(self, **tags: Any) -> int:
+        """Allocate a trial id and record it as ``pending`` (closed as a crash if the process dies)."""
         with self.lock:
             t = self._next_trial
             self._next_trial += 1
-            return t
+        self.append(trial=t, status="pending", stage="started", **tags)
+        return t
 
     def finished_trials(self) -> list[dict]:
-        return [r for r in self.ctx.ledger.finished() if r.get("status") not in ("baseline",)]
+        """Trials that count against ``budget.trials`` (same rule as Policy.n_started: no baseline, no no-edit)."""
+        return [r for r in self.ctx.ledger.finished() if r.get("status") not in ("baseline", "no_change")]
 
     def trials_done(self) -> int:
         return len(self.finished_trials())
@@ -201,7 +206,7 @@ class PolicyKit:
         for t, r in self.ctx.ledger.trials().items():
             if r.get("status") == "pending":
                 self.append(trial=t, status="crash", reason="interrupted before decision (resume)",
-                            thread=r.get("thread"))
+                            **{k: r[k] for k in self.TAGS if k in r})
                 n += 1
         return n
 
@@ -422,7 +427,7 @@ class PolicyKit:
 
 
 def baseline(kit: PolicyKit, start_hash: str, seeds: list[int], *, lane: int | None = None,
-             thread: str | None = None) -> dict:
+             thread: str | None = ORCH) -> dict:
     """Trial with status ``baseline``: score of the start artifact (s0 of the curve)."""
     for r in kit.ctx.ledger.trials().values():
         if r.get("status") == "baseline" and r.get("policy") == kit.policy and r.get("thread") == thread:
@@ -485,6 +490,7 @@ class NaiveTrialLedger(Policy):
         "agent": "researcher-0",
         "start_dir": None,
         "ledger_tail": 12,
+        "max_consecutive_no_change": 6,  # no-edit episodes don't use budget; stop if the agent stalls
     }
 
     def __init__(self, cfg: dict | None = None):
@@ -600,6 +606,7 @@ class NaiveTrialLedger(Policy):
             st["best_value"] = base.get("dev")
         paused = False
         last_feedback = ""
+        idle = 0
 
         while True:
             if ctx.paused():
@@ -607,7 +614,13 @@ class NaiveTrialLedger(Policy):
                 break
             if kit.out_of_budget():
                 break
+            if idle >= int(cfg["max_consecutive_no_change"]):
+                kit.append(kind="stalled", consecutive_no_change=idle)
+                break
+            n_before = kit.trials_done()
             stop, resume, halt_all = self._human_stops(ctx)
+            idle = 0 if getattr(self, "_last_done", None) is None or n_before != self._last_done else idle + 1
+            self._last_done = n_before
             if halt_all:
                 break
             halted = (st["auto_stopped"] - resume) | stop

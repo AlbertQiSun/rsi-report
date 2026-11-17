@@ -3,7 +3,7 @@
 
 CLI (stable):
     python tests/fake_openai_server.py --port N --script file.json [--host 127.0.0.1]
-        [--ports-file PATH --ports-key NAME] [--token-file PATH]
+        [--ports-file PATH --ports-key NAME] [--token-file PATH | --token-env VAR]
     --port 0 picks a free port. The bound port is printed on stdout as
     ``FAKE_OPENAI_PORT=<port>`` (one line, flushed) once the server is listening.
 
@@ -404,6 +404,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--script", help="script JSON file (see module docstring)")
     ap.add_argument("--token-file", help="require 'Authorization: Bearer <contents>'")
+    ap.add_argument("--token-env", help="require 'Authorization: Bearer $<this env var>'")
     ap.add_argument("--ports-file", help="merge {ports-key: port} into this JSON file")
     ap.add_argument("--ports-key", default="fake_openai")
     a = ap.parse_args(argv)
@@ -415,6 +416,8 @@ def main(argv: list[str] | None = None) -> int:
     if a.token_file:
         with open(a.token_file) as f:
             token = f.read().strip()
+    elif a.token_env:
+        token = os.environ.get(a.token_env) or None
     state = FakeState(script, token)
     srv = serve(a.host, a.port, state)
     port = srv.server_address[1]

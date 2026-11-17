@@ -16,6 +16,8 @@ Runtime is island mode. Everything runs on one cluster node (<node>: 3× A100 80
 `R=$R`. Python: serving env `$SCRATCH/miniconda3/envs/rsi/bin/python`; training env `$R/envs/rsi-train/bin/python`.
 GPU layout (default): GPU0 = vLLM (improver model), GPU1 = eval lane 1, GPU2 = eval lane 2. LoRA training temporarily borrows a lane, and the scheduler pauses that lane first.
 
+> - **Integration notes (A, for B/C/F):** (1) all services must use the same runs root: `RSI_RUNS_ROOT=$R/runs`. (2) `srun --overlap --ntasks=1` steps get 1 CPU by default; evald and training steps need `-c <n>` (e.g. `-c 12` per lane). (3) The gateway runs with `--inbound-token-file $R/run/agent_token`; that agent token is the only token that enters researcher sandboxes, so anything else calling the gateway (toolcall_test, lessons writer) uses the agent token as well. (4) The code checkout on the cluster is `$R/code/rsi-mini` (git clone of the private repo); the researcher sandbox binds it read-only. (5) Orchestrator configs live in `configs/*.yaml`; the CLI is `python -m rsi.orchestrator --config X [--resume --set run=<id>] | --pause RUN_DIR | --status RUN_DIR`. Programmatic: `rsi.orchestrator.run(cfg_dict, resume=False) -> summary`. Test doubles: `evald.factory` / `harness.factory` = `"module:callable"`.
+
 ## Ownership
 | worker | owns | delivers |
 |---|---|---|

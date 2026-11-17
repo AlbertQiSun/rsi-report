@@ -242,7 +242,7 @@ class ApexAI4AI(Policy):
             if u["fail_streak"] >= int(cfg["exit_after_failed_episodes"]) and not u["any_ok"]:
                 exited = True
                 break
-            t = kit.new_trial()
+            t = kit.new_trial(kind="explore", unit=unit, thread=unit, researcher=res["name"], rep=rep)
             kit.checkout(u["best_hash"], ws)
             left = (int(ex["trials"]) - u["n"]) if ex.get("trials") is not None else "?"
             prompt = PROGRAM.format(left=left, task_card=ctx.task.task_card(),
