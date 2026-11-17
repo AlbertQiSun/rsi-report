@@ -33,7 +33,7 @@ Task card
 {card}
 
 Current best {metric}: {best}
-Recent attempts in this thread (trial, artifact, {metric}, status, description):
+{prior}Recent attempts in this thread (trial, artifact, {metric}, status, description):
 {tail}
 """
 
@@ -48,7 +48,20 @@ class KarpathyGreedy(Policy):
             metric=task.metric, direction="lower" if task.lower_is_better else "higher",
             files=", ".join(task.editable_files), card=task.task_card(), best=best,
             tail=ctx.ledger.tail_text(thread.tid, n=int(self.cfg.get("tail", 8))),
-            extra=(self.cfg.get("program_extra", "") + "\n") if self.cfg.get("program_extra") else "")
+            extra=(self.cfg.get("program_extra", "") + "\n") if self.cfg.get("program_extra") else "",
+            prior=self.prior_block(ctx))
+
+    def prior_block(self, ctx) -> str:
+        rows = ctx.history_rows(int(self.cfg.get("prior_tail", 12))) if getattr(ctx, "history_from", None) else []
+        if not rows:
+            return ""
+        lines = ["Attempts from earlier runs you continue from (run/thread#trial, artifact, value, status, description):"]
+        for r in rows:
+            v = r.get("value")
+            vs = f"{v:.6f}" if isinstance(v, (int, float)) else "-"
+            lines.append(f"{r['thread']}#{r['trial']}\t{r.get('artifact')}\t{vs}\t{r.get('status')}\t"
+                         f"{(r.get('hypothesis') or '')[:120]}")
+        return "\n".join(lines) + "\n\n"
 
     def step(self, ctx, thread: ResearchThread, trial: int | None = None) -> dict:
         trial = self.new_trial(ctx) if trial is None else trial

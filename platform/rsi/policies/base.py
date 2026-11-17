@@ -135,7 +135,8 @@ class Policy:
         for i in range(k):
             tid = f"{prefix}-{i}"
             ws = ctx.run_dir / "threads" / tid / "workspace"
-            th = ResearchThread(tid=tid, idx=i, lane=lanes[i % len(lanes)], workspace=ws,
+            lane = None if self.cfg.get("lane_mode") == "shared" else lanes[i % len(lanes)]
+            th = ResearchThread(tid=tid, idx=i, lane=lane, workspace=ws,
                                 best_hash=base_hash, best_value=base_value,
                                 focus=(focuses[i % len(focuses)] if focuses else ""))
             for r in ctx.ledger.finished(tid):
@@ -146,18 +147,18 @@ class Policy:
             ws.mkdir(parents=True, exist_ok=True)
             th.lab_dir.mkdir(parents=True, exist_ok=True)
             (th.lab_dir / "outbox").mkdir(exist_ok=True)
-            if fresh:
-                start = pathlib.Path(ctx.task.start_artifact())
-                for p in start.iterdir():  # non-editable helpers (README, etc.) too
-                    if p.is_file():
-                        shutil.copy2(p, ws / p.name)
+            if fresh:  # non-editable helpers (README, etc.) from the task's start dir, then the start artifact
+                for src in dict.fromkeys([pathlib.Path(ctx.task.start_artifact()), pathlib.Path(ctx.start_dir())]):
+                    for p in src.iterdir():
+                        if p.is_file():
+                            shutil.copy2(p, ws / p.name)
             ctx.artifacts.checkout(th.best_hash, str(ws))
             threads.append(th)
         return threads
 
     def ensure_baseline(self, ctx) -> tuple[str, float | None]:
         """Evaluate the start artifact once per run (ledger status 'baseline', thread 'orchestrator')."""
-        start = pathlib.Path(ctx.task.start_artifact())
+        start = pathlib.Path(ctx.start_dir())
         files = snapshot_files(str(start), ctx.task.editable_files)
         h = ctx.artifacts.put(files)
         for r in ctx.ledger.finished("orchestrator"):
@@ -168,7 +169,7 @@ class Policy:
         trial = self.new_trial(ctx)
         ctx.ledger.append(trial=trial, thread="orchestrator", status="proposed", artifact_hash=h,
                           parent_hash=None, hypothesis="baseline (start artifact)", gen=ctx.gen)
-        lane = ctx.lanes[0] if ctx.lanes else None
+        lane = None if (self.cfg.get("lane_mode") == "shared" or not ctx.lanes) else ctx.lanes[0]
         res = self.evaluate(ctx, trial, h, seeds=list(self.cfg.get("baseline_seeds", ctx.task.dev_seeds)),
                             lane=lane, agent="orchestrator")
         value = res.get("value") if res.get("status") == "ok" else None
@@ -186,7 +187,7 @@ class Policy:
         lab.mkdir(parents=True, exist_ok=True)
         (lab / "outbox").mkdir(exist_ok=True)
         (lab / "card.md").write_text(ctx.task.task_card() + ("\n\n" + extra_notes if extra_notes else ""))
-        rows = []
+        rows = list(ctx.history_rows()) if hasattr(ctx, "history_rows") else []
         for r in ctx.ledger.finished(None if include_all_threads else thread.tid):
             if r.get("thread") not in (thread.tid, "orchestrator") and not include_all_threads:
                 continue

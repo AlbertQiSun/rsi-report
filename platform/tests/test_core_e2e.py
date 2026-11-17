@@ -194,3 +194,30 @@ def test_resume_recovers_inflight_eval(tmp_path, fake_llm):
     final = [r for r in led if r.get("trial") == last + 1 and r.get("status") != "pending"]
     assert final and "recovered" in final[-1]["reason"]
     assert s["n_trials"] >= 3
+
+
+def test_campaign_config_shape_start_from_and_history(tmp_path, fake_llm):
+    """Worker F's config shape: policy as a string + policy_cfg, top-level seeds, start_from, history_from,
+    budget.evals, lane_mode shared."""
+    FakeEvald.pause_after = None
+    first = make_cfg(tmp_path, fake_llm.url, run="g0", trials=2, threads=1)
+    orchestrator.run(first)
+    g0 = tmp_path / "runs" / "g0"
+    best = json.loads((g0 / "state.json").read_text())["thread:thread-0"]["best_hash"]
+    cfg = make_cfg(tmp_path, fake_llm.url, run="cff", trials=10, threads=2)
+    pol = cfg.pop("policy")
+    cfg.update(policy="karpathy_greedy", policy_cfg={"threads": 2, "lane_mode": "shared"}, seeds=[0],
+               rng_seed=7, start_from=str(g0 / "artifacts" / best), history_from=[str(g0)])
+    cfg["budget"] = {"trials": 10, "evals": 3, "episode_s": 60}
+    s = orchestrator.run(cfg)
+    run_dir = tmp_path / "runs" / "cff"
+    evs = events.validate_file(str(run_dir / "events.jsonl"))
+    subs = [e for e in evs if e["ev"] == "eval_submit"]
+    assert len(subs) <= 3 + 1          # evals cap (one in-flight claim may finish)
+    assert all(e["lane"] is None for e in subs)
+    base = [r for r in map(json.loads, (run_dir / "ledger.jsonl").read_text().splitlines())
+            if r.get("status") == "baseline"]
+    assert base[0]["artifact_hash"] == best   # started from G0's best artifact
+    traj = next((run_dir / "trajectories" / "harness").rglob("trial-*.json")).read_text()
+    assert "earlier runs" in traj and "prior:g0" in traj
+    assert s["policy"] == "karpathy_greedy"

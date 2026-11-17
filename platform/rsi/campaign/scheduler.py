@@ -1038,6 +1038,7 @@ class Campaign:
         env = dict(os.environ)
         env["PYTHONPATH"] = CODE_ROOT + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
         env["RSI_RUNS_ROOT"] = self.ctx["runs_root"]
+        env["R"] = self.ctx["R"]
         env["RSI_CAMPAIGN"] = self.cfg["campaign"]
         if self.dry:
             env.update({"RSI_CAMPAIGN_TIME_SCALE": str(self.scale), "RSI_CAMPAIGN_FAKE_DIR": self.fake_dir,

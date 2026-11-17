@@ -30,6 +30,8 @@ class RunContext:
     lanes: list[int] = field(default_factory=lambda: [1])   # eval lanes the threads map onto
     policy_cfg: dict = field(default_factory=dict)
     t_start: float = field(default_factory=time.time)
+    start_from: pathlib.Path | None = None      # artifact dir to start from instead of task.start_artifact()
+    history_from: list = field(default_factory=list)   # prior run dirs whose (dev-only) history the improver sees
 
     # ---- construction -------------------------------------------------
     @classmethod
@@ -58,9 +60,34 @@ class RunContext:
     def elapsed(self) -> float:
         return time.time() - self.t_start
 
+    def start_dir(self) -> pathlib.Path:
+        return pathlib.Path(self.start_from) if self.start_from else pathlib.Path(self.task.start_artifact())
+
+    def n_evals(self) -> int:
+        """Evaluator submissions recorded in the ledger (each distinct job id), baseline included."""
+        return len({r["job_id"] for r in self.ledger.records() if r.get("job_id")})
+
+    def history_rows(self, n: int | None = None) -> list[dict]:
+        """Finished, dev-only trial rows from ``history_from`` runs (oldest first)."""
+        from rsi.ledger import Ledger
+
+        rows = []
+        for d in self.history_from or []:
+            led = Ledger(str(pathlib.Path(d) / "ledger.jsonl"))
+            name = pathlib.Path(d).name
+            for r in led.finished():
+                if r.get("status") in ("no_change",):
+                    continue
+                rows.append({"trial": r.get("trial"), "thread": f"prior:{name}/{r.get('thread')}",
+                             "artifact": r.get("artifact_hash"), "value": r.get("dev"), "status": r.get("status"),
+                             "feedback": r.get("feedback", ""), "hypothesis": (r.get("hypothesis") or "")[:300]})
+        return rows[-n:] if n else rows
+
     def out_of_budget(self, n_trials_done: int) -> bool:
         b = self.budget or {}
         if b.get("trials") is not None and n_trials_done >= int(b["trials"]):
+            return True
+        if b.get("evals") is not None and self.n_evals() >= int(b["evals"]):
             return True
         if b.get("wall_s") is not None and self.elapsed() >= float(b["wall_s"]):
             return True

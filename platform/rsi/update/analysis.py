@@ -190,11 +190,14 @@ def decide(delta: dict, aa: dict, placebo: dict | None, *, floor: str = "per_tas
     c3 = placebo is not None and (placebo.get("ci") or [None])[0] is not None and placebo["ci"][0] > 0
     ok = bool(c1 and c2 and c3)
     m = aa.get("mde")
+    failed = [n for n, c in (("CI lower bound > 0", c1), ("Δ₂ > 2x A/A floor", c2),
+                             ("beats placebo" if placebo is not None else "placebo arm missing", c3)) if not c]
     text = ("second-order effect observed under the pre-registered rule" if ok else
             "not detected at this power; minimum detectable effect ≈ "
-            + (f"{m:.4f} nAUC" if m is not None else "unknown (A/A missing)"))
+            + (f"{m:.4f} nAUC" if m is not None else "unknown (A/A missing)")
+            + "; failed: " + ", ".join(failed))
     return {"ci_lower_gt_0": c1, "gt_2x_aa": c2, "beats_placebo": c3, "aa_floor": fl, "floor_kind": floor,
-            "observed": ok, "mde": m, "text": text}
+            "observed": ok, "mde": m, "failed": failed, "text": text}
 
 
 # ---------------------------------------------------------------------------- reading runs

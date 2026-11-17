@@ -480,3 +480,47 @@ def test_vanilla_model_cpu_contract():
     assert torch.allclose(la[:, :33], lb[:, :33], atol=1e-5)
     loss = model(x, x, reduction="none")
     assert loss.shape == (128,)
+
+
+def test_vanilla_train_smoke_cpu(tmp_path, data_root):
+    """The real start train.py/model.py, shrunk and moved to CPU by source substitution,
+    through the whole pipeline (train sandbox -> export -> dev + sealed scoring)."""
+    src = open(os.path.join(NANOCHAT_START_DIR, "train.py")).read()
+    subs = [("DEPTH = 12", "DEPTH = 2"), ("MODEL_DIM = 768", "MODEL_DIM = 64"), ("HEAD_DIM = 128", "HEAD_DIM = 32"),
+            ("TOTAL_BATCH_SIZE = 2**17", "TOTAL_BATCH_SIZE = 128"), ("DEVICE_BATCH_SIZE = 64", "DEVICE_BATCH_SIZE = 2"),
+            ('torch.device("cuda")', 'torch.device("cpu")'), ('device_type="cuda"', 'device_type="cpu"'),
+            ("torch.cuda.synchronize()", "None"), ("torch.compile(model, dynamic=False)", "model"),
+            ('MAX_SEQ_LEN, "train")', 'MAX_SEQ_LEN, "train", buffer_size=50, device="cpu")'),
+            ("torch.cuda.max_memory_allocated()", "0")]
+    for a, b in subs:
+        assert a in src, a
+        src = src.replace(a, b)
+    art = tmp_path / "vanilla"
+    art.mkdir()
+    (art / "train.py").write_text(src)
+    (art / "model.py").write_text(open(os.path.join(NANOCHAT_START_DIR, "model.py")).read())
+    s = EvalService(make_cfg(str(tmp_path / "e"), data_root, lanes=[LaneCfg(1, None)],
+                             train_env_extra={"RSI_TIME_BUDGET": "3"})).start()
+    try:
+        res = s.result(s.submit("test-vanilla", "nanochat", str(art), seeds=[0]), wait=True, timeout_s=300)
+        assert res["status"] == "ok", (res.get("error"), res.get("log_tail"), res["audit"])
+        ps = res["per_seed"][0]
+        assert ps["attn_backend"] == "sdpa"
+        assert ps["reported_training_s"] is not None and ps["reported_training_s"] >= 3
+        assert res["sealed"]["value"] is not None
+        hard = [d for d in res["audit"]["details"] if d["severity"] == "hard"]
+        assert not hard, hard
+    finally:
+        s.stop()
+
+
+def test_run_seeds_csv(svc, tmp_path, capsys):
+    from rsi.evald.__main__ import CSV_COLS, run_seeds
+
+    art = make_artifact(str(tmp_path / "csv"))
+    out = tmp_path / "nf.csv"
+    rows = run_seeds(svc, artifact=art, seeds=[5, 6], lanes=[1, 2], run="test-csv", out_csv=str(out))
+    assert [r["seed"] for r in rows] == [5, 6] and {r["lane"] for r in rows} == {1, 2}
+    lines = out.read_text().strip().splitlines()
+    assert lines[0].split(",") == CSV_COLS and len(lines) == 3
+    assert all(r["status"] == "ok" and r["dev_bpb"] and r["sealed_bpb"] for r in rows)

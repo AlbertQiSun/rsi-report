@@ -136,6 +136,27 @@ def make_task(cfg: dict):
 
 
 # ------------------------------------------------------------------ run
+def normalize_config(cfg: dict) -> dict:
+    """Accept both config shapes:
+    A: policy: {name: x, ...}            B (campaign): policy: x, policy_cfg: {...}
+    plus top-level seeds -> policy.seeds, rng_seed/seed, start_from, history_from."""
+    cfg = dict(cfg)
+    pol = cfg.get("policy") or {"name": "karpathy_greedy"}
+    if isinstance(pol, str):
+        pol = {"name": pol, **(cfg.get("policy_cfg") or {})}
+    else:
+        pol = {**(cfg.get("policy_cfg") or {}), **pol}
+    if cfg.get("seeds") is not None:
+        pol.setdefault("seeds", list(cfg["seeds"]))
+    cfg["policy"] = pol
+    cfg.pop("policy_cfg", None)
+    if "rng_seed" in cfg and "seed" not in cfg:
+        cfg["seed"] = cfg["rng_seed"]
+    hf = cfg.get("history_from") or []
+    cfg["history_from"] = [hf] if isinstance(hf, str) else list(hf)
+    return cfg
+
+
 def build_context(cfg: dict, *, resume: bool) -> tuple[RunContext, Any]:
     from rsi.policies import get_policy
 
@@ -149,6 +170,7 @@ def build_context(cfg: dict, *, resume: bool) -> tuple[RunContext, Any]:
         cfg = frozen
     elif os.path.exists(rd.config_path):
         raise SystemExit(f"run {run} already exists at {rd.path}; use --resume")
+    cfg = normalize_config(cfg)
     rd.create()
     events.register_run(run, rd.events)
     if not resume:
@@ -161,7 +183,9 @@ def build_context(cfg: dict, *, resume: bool) -> tuple[RunContext, Any]:
                      scaffold_dir=pathlib.Path(cfg["scaffold_dir"]) if cfg.get("scaffold_dir") else None,
                      budget=dict(cfg.get("budget") or {}), run_dir=pathlib.Path(rd.path),
                      ledger=Ledger(rd.ledger_path), rng_seed=int(cfg.get("seed", 0)),
-                     lanes=list(cfg.get("lanes") or [1]), policy_cfg=pol_cfg)
+                     lanes=list(cfg.get("lanes") or [1]), policy_cfg=pol_cfg,
+                     start_from=pathlib.Path(cfg["start_from"]) if cfg.get("start_from") else None,
+                     history_from=list(cfg.get("history_from") or []))
     if resume:
         st = ctx.load_state()
         # wall budget counts time already spent before the pause
@@ -171,7 +195,7 @@ def build_context(cfg: dict, *, resume: bool) -> tuple[RunContext, Any]:
 
 def run(cfg: dict, *, resume: bool = False) -> dict:
     ctx, policy = build_context(cfg, resume=resume)
-    cfg = read_json(str(ctx.run_dir / "config.json")) or cfg
+    cfg = normalize_config(read_json(str(ctx.run_dir / "config.json")) or cfg)
     if resume and ctx.paused():
         os.remove(ctx.run_dir / "PAUSE")
     if not resume:

@@ -152,6 +152,16 @@ def cmd_vanilla(a) -> int:
             print("evald not reachable", file=sys.stderr)
             return 2
     svc = None
+    if target is None and a.mode == "direct":
+        from rsi.evald.client import EvalClient
+
+        try:
+            if EvalClient.from_run_dir(os.path.join(a.R, "run")).health():
+                print("evald is running: refusing direct mode (it would share GPUs and state); use --mode evald",
+                      file=sys.stderr)
+                return 2
+        except Exception:  # noqa: BLE001
+            pass
     if target is None:
         from rsi.evald.service import EvalService
 

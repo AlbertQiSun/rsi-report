@@ -497,6 +497,8 @@ class RecursiveFirstSteps(Policy):
                 rnd += 1
                 if cfg.get("max_rounds") is not None and rnd >= int(cfg["max_rounds"]):
                     break
+        if not paused and st["final"] is None and st["max_round"] not in st["l3_rounds"]:
+            self._l3(kit, st, ctx, st["max_round"])       # audit the last (partial) round before the final eval
         for tid in tids:
             if not paused:
                 kit.end(tid, "budget")
