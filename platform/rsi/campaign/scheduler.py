@@ -1438,7 +1438,7 @@ class Campaign:
             return
         for h in cfg["holds"]:
             holder = self.state["holds"].get(h)
-            if holder and self.steps[holder].status not in TERMINAL:
+            if holder and holder != step.id and self.steps[holder].status not in TERMINAL:
                 return
         for h in cfg["holds"]:
             self.state["holds"][h] = step.id
