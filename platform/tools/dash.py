@@ -104,7 +104,7 @@ def lane_jobs():
         fresh = [l for l in logs if NOW - os.path.getmtime(l) < 90]
         done = os.path.exists(os.path.join(jd, "result.json")) or j.get("state") in ("done", "failed")
         if fresh and not done:
-            t0 = min(os.path.getctime(l) for l in fresh)
+            t0 = j.get("t_start") or min(os.path.getctime(l) for l in fresh)
             seed = os.path.basename(fresh[0])[7:-4]
             cur[lane] = {"run": j.get("run", "?"), "seed": seed, "trial": j.get("trial"), "t0": t0,
                          "hash": j.get("artifact_hash", "")[:8]}
@@ -150,32 +150,33 @@ def run_summaries(max_age_h=36):
     return runs
 
 
-def noise_floor_block(runs, width):
-    nf = [r for r in runs if r["name"].startswith("vanilla-")]
+def noise_floor_block(runs, width, target=20):
+    """All vanilla-* runs of the last few hours are the same artifact (vanilla start): pool their seeds."""
+    nf = [r for r in runs if r["name"].startswith("vanilla-") and NOW - r["tlast"] < 4 * 3600]
     if not nf:
         return []
-    r = nf[0]
-    n_target = r["submitted"] or 20
-    done = r["evals"]
-    lines = [section(f"G1a NOISE FLOOR · vanilla start · run {r['name']}", width)]
-    walls = [e.get("wall_s") for e in r["events"] if e.get("ev") == "eval_result" and e.get("wall_s")]
+    res = []
+    for r in nf:
+        res += [e for e in r["events"] if e.get("ev") == "eval_result"]
+    ok = [e for e in res if e.get("status") == "ok" and isinstance(e.get("value"), (int, float))]
+    vals = [e["value"] for e in sorted(ok, key=lambda e: e.get("t", 0))]
+    done = len(vals)
+    lines = [section(f"G1a NOISE FLOOR · vanilla start · pooled over {len(nf)} run(s) · target {target} ok seeds", width)]
+    walls = [e.get("wall_s") for e in ok if e.get("wall_s")]
     per = st.mean(walls) if walls else EVAL_EST_S
-    lanes = 5
-    remaining = max(0, n_target - done)
-    eta = NOW + (remaining / lanes) * per if remaining else NOW
-    lines.append(f"  progress [{bar(done / max(1, n_target), 30)}] {done}/{n_target} seeds   "
-                 f"per-seed wall ≈ {per:.0f}s   ETA {bj(eta)} (in {dur(eta - NOW)})" if remaining else
-                 f"  progress [{bar(1, 30)}] {done}/{n_target} seeds — DONE")
-    if r["vals"]:
-        v = r["vals"]
-        sd = st.stdev(v) if len(v) > 1 else 0.0
-        lines.append(f"  dev BPB   mean {st.mean(v):.4f}  sd {sd:.4f}  min {min(v):.4f}  max {max(v):.4f}  (n={len(v)})"
-                     f"   per-seed {spark(v)}")
-        stat = {}
-        for e in r["events"]:
-            if e.get("ev") == "eval_result":
-                stat[e.get("status")] = stat.get(e.get("status"), 0) + 1
-        lines.append(f"  statuses {stat}   (reference: Recursive vanilla 1.0587 on B200 + FA3; ours A100 + SDPA)")
+    remaining = max(0, target - done)
+    eta = NOW + -(-remaining // 5) * per
+    lines.append(f"  progress [{bar(done / target, 30)}] {done}/{target} ok seeds   per-seed wall ≈ {per:.0f}s   "
+                 + (f"ETA {bj(eta)} (in {dur(eta - NOW)})" if remaining else "TARGET REACHED"))
+    if vals:
+        sd = st.stdev(vals) if len(vals) > 1 else 0.0
+        lines.append(f"  dev BPB   mean {st.mean(vals):.4f}  sd {sd:.4f}  min {min(vals):.4f}  max {max(vals):.4f}  "
+                     f"(n={len(vals)})   per-seed {spark(vals)}")
+    stat = {}
+    for e in res:
+        stat[e.get("status")] = stat.get(e.get("status"), 0) + 1
+    lines.append(f"  all results by status {stat}   (crashes = the aborted OOM run)   "
+                 f"ref: Recursive vanilla 1.0587 (B200+FA3); ours A100+SDPA")
     return lines
 
 
