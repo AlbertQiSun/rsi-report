@@ -3,7 +3,7 @@
   "sandbox": "bwrap",
   "claude_bin": "${R}/tools/claude/current/claude",
   "gateway_url": null,
-  "gateway_ports_key": "gateway_agent",
+  "gateway_ports_key": "gateway_agent_cc",
   "api_key_file": "${R}/run/agent_token",
   "auth_env": "ANTHROPIC_AUTH_TOKEN",
   "python": "/scratch/user/miniconda3/envs/rsi/bin/python",
