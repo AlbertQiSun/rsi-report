@@ -152,6 +152,7 @@ def normalize_config(cfg: dict) -> dict:
     cfg.pop("policy_cfg", None)
     if "rng_seed" in cfg and "seed" not in cfg:
         cfg["seed"] = cfg["rng_seed"]
+    cfg.setdefault("seed", 0)   # rsi.update.analysis pairs runs across arms by seed
     hf = cfg.get("history_from") or []
     cfg["history_from"] = [hf] if isinstance(hf, str) else list(hf)
     return cfg

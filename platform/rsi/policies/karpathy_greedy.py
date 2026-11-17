@@ -47,7 +47,7 @@ class KarpathyGreedy(Policy):
         return PROGRAM.format(
             metric=task.metric, direction="lower" if task.lower_is_better else "higher",
             files=", ".join(task.editable_files), card=task.task_card(), best=best,
-            tail=ctx.ledger.tail_text(thread.tid, n=int(self.cfg.get("tail", 8))),
+            tail=ctx.ledger.tail_text(thread.tid, n=int(self.cfg.get("tail", 8)), metric=task.metric),
             extra=(self.cfg.get("program_extra", "") + "\n") if self.cfg.get("program_extra") else "",
             prior=self.prior_block(ctx))
 

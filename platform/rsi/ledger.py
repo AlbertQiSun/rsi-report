@@ -48,10 +48,10 @@ class Ledger:
             out = [r for r in out if r.get("thread") == thread]
         return sorted(out, key=lambda r: r["trial"])
 
-    def tail_text(self, thread: str | None = None, n: int = 8) -> str:
+    def tail_text(self, thread: str | None = None, n: int = 8, metric: str = "value") -> str:
         """results.tsv-style view (dev scores only) for agent prompts."""
         rows = self.finished(thread)[-n:]
-        lines = ["trial\tartifact\tval_bpb\tstatus\tdescription"]
+        lines = [f"trial\tartifact\t{metric}\tstatus\tdescription"]
         for r in rows:
             v = r.get("dev")
             vs = f"{v:.6f}" if isinstance(v, (int, float)) else "-"
