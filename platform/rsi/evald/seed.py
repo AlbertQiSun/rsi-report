@@ -107,6 +107,14 @@ class SeedRunner:
             "HF_HUB_OFFLINE": "1", "HF_HUB_DISABLE_TELEMETRY": "1", "TRANSFORMERS_OFFLINE": "1",
             "CUDA_VISIBLE_DEVICES": gpu.uuid if gpu is not None else "",
             "CUDA_DEVICE_ORDER": "PCI_BUS_ID",
+            # The sandbox has no /etc/passwd entry for our uid: getpass.getuser() (used by torch.compile's
+            # cache-dir logic) reads these env vars first and only then falls back to pwd, which raises.
+            "USER": "rsi", "LOGNAME": "rsi",
+            # torch.compile / triton caches and toolchain inside the writable sandbox tmp.
+            "TORCHINDUCTOR_CACHE_DIR": os.path.join(tmp_inside, "inductor"),
+            "TRITON_CACHE_DIR": os.path.join(tmp_inside, "triton"),
+            "CC": "/usr/bin/gcc", "CXX": "/usr/bin/g++",
+            "TRITON_LIBCUDA_PATH": "/usr/lib64",
         }
 
     def _env_mount(self) -> list[Mount]:
