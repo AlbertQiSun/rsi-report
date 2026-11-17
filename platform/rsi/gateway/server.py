@@ -101,6 +101,20 @@ class GatewayConfig:
     quiet: bool = False
 
 
+def upstreams_from_ports(d: dict) -> dict[str, str]:
+    """ports.json -> {base: url}.
+
+    ``"vllm_<base>": <int port>``      vLLM on this node (http://127.0.0.1:<port>)
+    ``"<base>": "http://host:port"``   explicit URL (e.g. the 27B edge on node-c); wins over vllm_<base>
+    """
+    out = {k[len("vllm_"):]: f"http://127.0.0.1:{v}" for k, v in d.items()
+           if k.startswith("vllm_") and isinstance(v, int) and not isinstance(v, bool)}
+    for k, v in d.items():
+        if isinstance(v, str) and v.startswith(("http://", "https://")) and not k.startswith("vllm_"):
+            out[k] = v.rstrip("/").removesuffix("/v1")
+    return out
+
+
 class Upstreams:
     def __init__(self, cfg: GatewayConfig):
         self.cfg = cfg
@@ -113,15 +127,14 @@ class Upstreams:
         if not p:
             return
         try:
-            m = os.stat(p).st_mtime
+            st = os.stat(p)
         except FileNotFoundError:
             return
-        if m == self._mtime:
+        key = (st.st_mtime_ns, st.st_size, st.st_ino)
+        if key == self._mtime:
             return
-        d = _ports.read_ports(p)
-        self._from_ports = {k[len("vllm_"):]: f"http://127.0.0.1:{v}" for k, v in d.items()
-                            if k.startswith("vllm_") and isinstance(v, int)}
-        self._mtime = m
+        self._from_ports = upstreams_from_ports(_ports.read_ports(p))
+        self._mtime = key
 
     def table(self) -> dict[str, str]:
         with self._lock:
@@ -305,7 +318,7 @@ class Gateway:
                 append_locked(trajectory_path(self.cfg.runs_root, run, agent), rec)
             except OSError as e:
                 self.log(f"trajectory write failed: {e}")
-        if _events is not None:
+        if _events is not None and self.cfg.record:
             try:
                 path = os.path.join(self.cfg.runs_root, run, "events.jsonl")
                 _events.get_log(path, run).emit(
@@ -615,7 +628,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=0, help="0 = random free high port")
     ap.add_argument("--ports-file", default=None, help="default $R/run/ports.json")
-    ap.add_argument("--ports-key", default="gateway")
+    ap.add_argument("--ports-key", default="gateway", help="'' = do not write ports.json")
     ap.add_argument("--token-file", default=None, help="vLLM API key / admin token; default $R/run/token")
     ap.add_argument("--inbound-token-file", default=None,
                     help="token clients must present (default: same as --token-file)")
@@ -628,7 +641,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--retry-deadline-s", type=float, default=120.0)
     ap.add_argument("--timeout-s", type=float, default=1800.0)
     ap.add_argument("--max-inflight", type=int, default=64)
-    ap.add_argument("--no-record", action="store_true", help="do not write trajectories")
+    ap.add_argument("--no-record", action="store_true",
+                    help="write neither trajectories nor llm_call events (edge mode in front of a remote vLLM)")
     ap.add_argument("--quiet", action="store_true")
     a = ap.parse_args(argv)
 
@@ -652,7 +666,8 @@ def main(argv: list[str] | None = None) -> int:
     port = a.port or _ports.free_port(a.host)
     srv, gw = make_server(cfg, a.host, port)
     port = srv.server_address[1]
-    _ports.merge_ports({a.ports_key: port}, ports_path)
+    if a.ports_key:
+        _ports.merge_ports({a.ports_key: port}, ports_path)
     print(f"GATEWAY_PORT={port}", flush=True)
     gw.log(f"listening on http://{a.host}:{port}/v1 runs_root={cfg.runs_root} "
            f"upstreams={gw.upstreams.table()} inbound_auth={'on' if inbound else 'off'}")

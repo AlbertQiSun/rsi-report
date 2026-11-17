@@ -3,10 +3,13 @@
 ``$R/run/ports.json`` is a flat JSON object ``{service_key: port}``. Writers merge under an
 exclusive flock so concurrent services never clobber each other's entries.
 
+Values are ints (a port on 127.0.0.1 of the node that wrote it) or URL strings.
 Keys written by worker C:
-    vllm_improver      vLLM serving served-model-name "improver" (9B; bundle/serve_vllm.sh 9b)
-    vllm_ladder-27b    vLLM serving "ladder-27b" (bundle/serve_vllm.sh 27b)
-    gateway            the logging gateway (python -m rsi.gateway)
+    vllm_<name>  int   vLLM on this node, served-model-name <name> (bundle/serve_vllm.sh, local mode)
+    <name>       str   "http://host:port" base URL that serves model <name>; written by serve_vllm.sh in
+                       both modes (local: 127.0.0.1; --expose: the node's cluster IP, i.e. the edge gateway).
+                       The gateway prefers this over vllm_<name>. Names: improver, ladder-27b.
+    gateway      int   the logging gateway on the orchestrator node (python -m rsi.gateway)
 """
 
 from __future__ import annotations
@@ -79,6 +82,25 @@ def merge_ports(updates: dict, path: str | None = None, remove: list[str] | None
         os.close(fd)
 
 
+def cluster_ip() -> str:
+    """This node's cluster-network IPv4 (env BIND_IP wins). Never 127.x."""
+    ip = os.environ.get("BIND_IP")
+    if ip:
+        return ip
+    try:
+        for fam, _, _, _, sa in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+            if not sa[0].startswith("127."):
+                return sa[0]
+    except OSError:
+        pass
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:  # no packet is sent
+        s.connect(("10.255.255.255", 1))
+        ip = s.getsockname()[0]
+    if ip.startswith("127."):
+        raise RuntimeError("could not determine cluster IP; set BIND_IP")
+    return ip
+
+
 def free_port(host: str = "127.0.0.1", lo: int = 20000, hi: int = 60999) -> int:
     """A currently free TCP port in [lo, hi] (random high port; tiny race until bound)."""
     import random
@@ -101,6 +123,10 @@ if __name__ == "__main__":  # tiny CLI used by bundle/serve_vllm.sh
     sub = ap.add_subparsers(dest="cmd", required=True)
     f = sub.add_parser("free")
     f.add_argument("--host", default="127.0.0.1")
+    sub.add_parser("ip")
+    rm = sub.add_parser("remove")
+    rm.add_argument("--path", default=None)
+    rm.add_argument("keys", nargs="+")
     m = sub.add_parser("merge")
     m.add_argument("--path", default=None)
     m.add_argument("kv", nargs="+", help="key=port")
@@ -110,6 +136,10 @@ if __name__ == "__main__":  # tiny CLI used by bundle/serve_vllm.sh
     a = ap.parse_args()
     if a.cmd == "free":
         print(free_port(a.host))
+    elif a.cmd == "ip":
+        print(cluster_ip())
+    elif a.cmd == "remove":
+        merge_ports({}, a.path, remove=a.keys)
     elif a.cmd == "merge":
         upd = {}
         for kv in a.kv:

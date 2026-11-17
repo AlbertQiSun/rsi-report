@@ -1,0 +1,7 @@
+.venv/
+__pycache__/
+*.pyc
+# large or scratch renders; keep committed sample GIF/MP4 under 10 MB each
+*.tmp.mp4
+*.tmp.gif
+renders/

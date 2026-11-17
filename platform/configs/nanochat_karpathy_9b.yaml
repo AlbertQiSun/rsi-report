@@ -1,0 +1,51 @@
+# First campaign (UV3): NanoChat from the vanilla start, Qwen3.5-9B improver, karpathy_greedy,
+# 2 research threads, each mapped to one eval lane (GPU1, GPU2). Island mode: everything on node-a.
+# Start:   python -m rsi.orchestrator --config configs/nanochat_karpathy_9b.yaml
+# Resume:  python -m rsi.orchestrator --config configs/nanochat_karpathy_9b.yaml --resume --set run=<run id>
+run: nanochat-9b-karpathy-{ts}
+runs_root: ${R}/runs
+gen: 0
+task:
+  name: nanochat
+  args: {}
+policy:
+  name: karpathy_greedy
+  threads: 2
+  seeds: [0]                    # single screening seed, as in Karpathy's loop (§4.1); confirmations are a separate policy
+  episode_s: 1200               # hard wall-clock per OpenCode episode
+  max_consecutive_no_change: 5
+  s_ref: null                   # set after measuring optimized_from_vanilla on A100 (nAUC needs it)
+model: improver                 # gateway model name -> vLLM served-model-name (bundle/serve_vllm.sh 9b)
+improver:
+  model: Qwen/Qwen3.5-9B
+scaffold_dir: null
+budget:
+  trials: 90                    # evaluator calls (main x-axis), both threads together
+  wall_s: 50400                 # 14 h
+  episode_s: 1200
+lanes: [1, 2]
+evald:
+  url: null                     # null -> ports.json "evald"
+  token_file: ${R}/run/token
+harness:
+  kind: opencode
+  sandbox: bwrap
+  opencode_bin: ${R}/tools/opencode/current/package/bin/opencode
+  gateway_url: null             # null -> ports.json "gateway"
+  api_key_file: ${R}/run/agent_token
+  python: /scratch/user/miniconda3/envs/rsi/bin/python
+  platform_dir: ${R}/code/rsi-mini
+  ddg_cmd: ["${R}/envs/mcp/bin/duckduckgo-mcp-server"]
+  fetch_cmd: ["${R}/envs/mcp/bin/mcp-server-fetch"]
+  ro_paths:
+    - /scratch/user/miniconda3/envs/rsi
+    - ${R}/envs/mcp
+    - ${R}/envs/rsi-train
+    - ${R}/code/rsi-mini
+    - ${R}/tools/opencode
+  sandbox_path: ${R}/envs/rsi-train/bin:/usr/local/bin:/usr/bin:/bin
+  web: true                     # D4: DDG + fetch through the blocklist proxy; set false for the web-off arm
+  subagents: true
+  export: true
+  context_tokens: 65536
+  max_output_tokens: 8192
