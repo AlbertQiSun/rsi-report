@@ -162,7 +162,16 @@ def parse_lanes(spec: str) -> list[LaneCfg]:
         for lane in ids:
             if remote is not None:
                 jobid, _, node = remote.partition(":")
-                out.append(LaneCfg(lane, "slurm", jobid=jobid, node=node or None))
+                if len(ids) > 1:
+                    # A range of remote lanes on one node: pin lane k to that node's GPU (k - first).
+                    # With --overlap, Slurm does NOT give concurrent steps distinct GPUs (all three lanes
+                    # landed on GPU0 of node-b and OOMed on 2026-11-17), so the step sees all GPUs
+                    # of the hold and the seed runner binds only the pinned one into the sandbox.
+                    srun_args = [a for a in DEFAULT_REMOTE_SRUN_ARGS if not a.startswith("--gres=")]
+                    srun_args.append(f"--gres=gpu:a100:{len(ids)}")
+                    out.append(LaneCfg(lane, lane - ids[0], jobid=jobid, node=node or None, srun_args=srun_args))
+                else:
+                    out.append(LaneCfg(lane, "slurm", jobid=jobid, node=node or None))
             elif gpu_s is None:
                 out.append(LaneCfg(lane, lane))
             elif gpu_s.lower() in ("cpu", "none", ""):

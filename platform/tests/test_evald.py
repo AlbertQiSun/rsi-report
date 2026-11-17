@@ -537,11 +537,14 @@ def test_parse_lanes_and_srun_argv():
 
     ls = parse_lanes("1,2,3-5@10000002:node-b,6:cpu")
     assert [(l.lane, l.gpu, l.jobid, l.node) for l in ls] == [
-        (1, 1, None, None), (2, 2, None, None), (3, "slurm", "10000002", "node-b"),
-        (4, "slurm", "10000002", "node-b"), (5, "slurm", "10000002", "node-b"), (6, None, None, None)]
+        (1, 1, None, None), (2, 2, None, None), (3, 0, "10000002", "node-b"),
+        (4, 1, "10000002", "node-b"), (5, 2, "10000002", "node-b"), (6, None, None, None)]
     a = srun_argv(ls[2])
     assert a[:5] == ["srun", "--jobid=10000002", "--overlap", "--ntasks=1", "--nodes=1"]
-    assert "--nodelist=node-b" in a and "--gres=gpu:a100:1" in a and "--cpu-bind=none" in a
+    # a range of remote lanes pins GPUs; the step must see all of them (overlap steps share GPUs)
+    assert "--nodelist=node-b" in a and "--gres=gpu:a100:3" in a and "--cpu-bind=none" in a
+    single = parse_lanes("7@123:n1")[0]
+    assert single.gpu == "slurm" and "--gres=gpu:a100:1" in srun_argv(single)
     assert "--mem=60G" in a and "--cpus-per-task=6" in a
     env = clean_slurm_env({"SLURM_JOB_ID": "1", "SLURM_CONF": "/etc/slurm.conf", "SRUN_CPUS_PER_TASK": "4",
                            "PATH": "/bin"})
