@@ -221,7 +221,8 @@ class Policy:
         ctx.ledger.append(trial=trial, thread=thread.tid, status="pending", phase="proposed", artifact_hash=h,
                           parent_hash=parent_hash, hypothesis=hypothesis, diff_stat=ds,
                           submitted=bool(sub), n_tool_calls=episode.get("n_tool_calls"),
-                          episode_ok=episode.get("ok"))
+                          episode_ok=episode.get("ok"), web=episode.get("web"),
+                          retrieval_assisted=bool((episode.get("web") or {}).get("calls")))
         return Proposal(trial, thread.tid, h, parent_hash, hypothesis, ds, episode)
 
     def evaluate(self, ctx, trial: int, artifact_hash: str, *, seeds: list[int], lane: int | None,

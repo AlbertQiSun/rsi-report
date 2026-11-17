@@ -1,0 +1,123 @@
+"""ports.json / token helpers shared by the gateway, serve_vllm.sh and clients. Stdlib only.
+
+``$R/run/ports.json`` is a flat JSON object ``{service_key: port}``. Writers merge under an
+exclusive flock so concurrent services never clobber each other's entries.
+
+Keys written by worker C:
+    vllm_improver      vLLM serving served-model-name "improver" (9B; bundle/serve_vllm.sh 9b)
+    vllm_ladder-27b    vLLM serving "ladder-27b" (bundle/serve_vllm.sh 27b)
+    gateway            the logging gateway (python -m rsi.gateway)
+"""
+
+from __future__ import annotations
+
+import fcntl
+import json
+import os
+import socket
+
+
+def default_rsi_root() -> str:
+    return os.environ.get("R") or os.environ.get("RSI_ROOT") or "/scratch/user/rsi"
+
+
+def default_ports_path() -> str:
+    return os.environ.get("RSI_PORTS") or os.path.join(default_rsi_root(), "run", "ports.json")
+
+
+def default_token_path() -> str:
+    return os.environ.get("RSI_TOKEN_FILE") or os.path.join(default_rsi_root(), "run", "token")
+
+
+def read_token(path: str | None) -> str | None:
+    if not path:
+        return None
+    try:
+        with open(path) as f:
+            tok = f.read().strip()
+        return tok or None
+    except FileNotFoundError:
+        return None
+
+
+def read_ports(path: str | None = None) -> dict:
+    path = path or default_ports_path()
+    try:
+        with open(path) as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except (FileNotFoundError, ValueError):
+        return {}
+
+
+def merge_ports(updates: dict, path: str | None = None, remove: list[str] | None = None) -> dict:
+    """Merge ``updates`` into ports.json atomically (flock); never drops other keys."""
+    path = path or default_ports_path()
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o644)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        raw = b""
+        while chunk := os.read(fd, 65536):
+            raw += chunk
+        try:
+            data = json.loads(raw.decode() or "{}")
+            if not isinstance(data, dict):
+                data = {}
+        except ValueError:
+            data = {}
+        data.update(updates)
+        for k in remove or []:
+            data.pop(k, None)
+        out = (json.dumps(data, indent=1, sort_keys=True) + "\n").encode()
+        os.lseek(fd, 0, 0)
+        os.ftruncate(fd, 0)
+        os.write(fd, out)
+        return data
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
+
+
+def free_port(host: str = "127.0.0.1", lo: int = 20000, hi: int = 60999) -> int:
+    """A currently free TCP port in [lo, hi] (random high port; tiny race until bound)."""
+    import random
+    for _ in range(200):
+        p = random.randint(lo, hi)
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            try:
+                s.bind((host, p))
+                return p
+            except OSError:
+                continue
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind((host, 0))
+        return s.getsockname()[1]
+
+
+if __name__ == "__main__":  # tiny CLI used by bundle/serve_vllm.sh
+    import argparse
+    ap = argparse.ArgumentParser()
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    f = sub.add_parser("free")
+    f.add_argument("--host", default="127.0.0.1")
+    m = sub.add_parser("merge")
+    m.add_argument("--path", default=None)
+    m.add_argument("kv", nargs="+", help="key=port")
+    g = sub.add_parser("get")
+    g.add_argument("--path", default=None)
+    g.add_argument("key")
+    a = ap.parse_args()
+    if a.cmd == "free":
+        print(free_port(a.host))
+    elif a.cmd == "merge":
+        upd = {}
+        for kv in a.kv:
+            k, v = kv.split("=", 1)
+            upd[k] = int(v) if v.isdigit() else v
+        merge_ports(upd, a.path)
+    else:
+        v = read_ports(a.path).get(a.key)
+        if v is None:
+            raise SystemExit(1)
+        print(v)
