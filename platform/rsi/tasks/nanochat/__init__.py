@@ -24,7 +24,7 @@ class NanoChatTask(Task):
     editable_files = ("train.py", "model.py")
     dev_seeds = (0,)
 
-    def __init__(self, time_budget_s: float = 300.0, startup_margin_s: float = 180.0, gpu: str = "1x A100 80GB",
+    def __init__(self, time_budget_s: float = 300.0, startup_margin_s: float = 50.0, gpu: str = "1x A100 80GB",
                  name: str | None = None):
         if name:
             self.name = name
@@ -54,9 +54,12 @@ scores the model you export on held-out text it keeps to itself.
 ## How one evaluation works
 1. Your artifact directory is copied into a fresh sandbox: {self.gpu}, no network, no
    access to anything except the paths below. `python train.py` is run with env `SEED`.
-2. Hard limit: the whole process is killed at **{lim:.0f} s wall clock** after it starts
-   (training budget {self.time_budget_s:.0f} s + {self.startup_margin_s:.0f} s for startup, compile and export).
-   A killed run scores nothing (status `timeout`). `rsilib.time_left()` gives the seconds left.
+2. Budget rule (total wall clock): the whole process is killed at **{lim:.0f} s wall clock**
+   after it starts. Startup, data loading, compilation, training and `export_model` all count
+   against this one budget; how you split it is up to you (e.g. less compile time leaves more
+   training time). The reference start trains for {self.time_budget_s:.0f} s and needs about 340 s in total,
+   so the default leaves little slack. A killed run scores nothing (status `timeout`).
+   `rsilib.time_left()` gives the training seconds left of the default {self.time_budget_s:.0f} s.
    Times your script prints are logged but never trusted; the evaluator measures them.
 3. Before exiting, `train.py` must call `rsilib.export_model(model, config)`.
 4. The evaluator (a separate process) imports your `model.py`, calls `build_model(config)`,

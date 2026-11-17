@@ -277,6 +277,13 @@ def time_check(summary: dict, measured_wall_s: float, slack_s: float = 5.0) -> l
             flags.append(_flag("time_report_mismatch",
                                f"script reported {key}={v:.1f}s but the process ran {measured_wall_s:.1f}s wall",
                                "soft"))
+    # Total-wall rule (2026-11-17 margin test): training past the default 300 s is legal under the
+    # 350 s total limit, but we tag it so "trained longer" gains can be separated from real ones later.
+    v = summary.get("training_seconds")
+    if isinstance(v, float) and v > 305.0:
+        flags.append(_flag("training_beyond_default_budget",
+                           f"script reported training_seconds={v:.1f}s (> 300 s default); legal under the total-wall rule",
+                           "soft"))
     return flags
 
 

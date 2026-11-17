@@ -47,7 +47,7 @@ class EvaldConfig:
     lanes: list[LaneCfg] = field(default_factory=lambda: [LaneCfg(1, 1), LaneCfg(2, 2)])
     sandbox: str = "bwrap"              # "bwrap" | "none" (Mac tests; prints a warning)
     time_budget_s: float = 300.0        # D5: hard wall-clock limit = time_budget_s + startup_margin_s
-    startup_margin_s: float = 180.0     # set from the S0 noise-floor run
+    startup_margin_s: float = 50.0      # total wall rule: 300+50 = 350 s (S0: vanilla max 344 s; margin test 2026-11-17)
     score_timeout_s: float = 1200.0
     prepare_timeout_s: float = 3600.0
     seq_len: int = 2048
