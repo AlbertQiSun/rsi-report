@@ -75,6 +75,28 @@ def do_endpoint(spec: dict) -> dict:
     return {"n_artifacts": len(cands), "seeds": spec["seeds"], "summary": summary, "t": time.time()}
 
 
+def do_selfdesign(spec: dict) -> dict:
+    from rsi.update.selfdesign import design
+
+    return design(spec)
+
+
+def do_sft_recipe(spec: dict) -> dict:
+    from rsi.update.selfdesign import build_recipe_sft
+
+    recipe = json.load(open(spec["recipe_path"]))
+    match_n = None
+    if spec.get("match_manifest"):
+        mm = json.load(open(spec["match_manifest"]))
+        match_n = int(mm.get("n_train", 0)) + int(mm.get("n_valid", 0))
+    m = build_recipe_sft(spec["run_dirs"], recipe, spec["out"], random_placebo=bool(spec.get("random_placebo")),
+                         match_n=match_n, salt=spec.get("salt", "sdr"))
+    n = int(m.get("n_train", 0)) + int(m.get("n_valid", 0))
+    return {"out": spec["out"], "n_examples": n, "n_total": n, "by_label": m.get("by_label"), "mode": m.get("mode"),
+            "heldout_overlap": 0, "placebo_shortfall": (m.get("report") or {}).get("placebo_shortfall"),
+            "recipe_path": spec["recipe_path"]}
+
+
 def do_decision(spec: dict) -> dict:
     """Run worker D's pre-registered analysis and reduce it to what the campaign needs."""
     from rsi.update.analysis import analyse
@@ -126,11 +148,12 @@ def do_decision(spec: dict) -> dict:
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="rsi.campaign.actions")
-    ap.add_argument("what", choices=["lessons", "sft", "endpoint", "decision"])
+    ap.add_argument("what", choices=["lessons", "sft", "endpoint", "decision", "selfdesign", "sft_recipe"])
     ap.add_argument("--spec", required=True)
     a = ap.parse_args(argv)
     spec = json.load(open(a.spec))
-    out = {"lessons": do_lessons, "sft": do_sft, "endpoint": do_endpoint, "decision": do_decision}[a.what](spec)
+    out = {"lessons": do_lessons, "sft": do_sft, "endpoint": do_endpoint, "decision": do_decision,
+           "selfdesign": do_selfdesign, "sft_recipe": do_sft_recipe}[a.what](spec)
     print(json.dumps(out, default=str))
     return 0
 

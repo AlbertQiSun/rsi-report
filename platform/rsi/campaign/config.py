@@ -15,7 +15,8 @@ import re
 import time
 from typing import Any, Callable
 
-STEP_KINDS = {"cmd", "run", "muar_arm", "lessons", "sft", "lora", "service", "decision", "endpoint"}
+STEP_KINDS = {"cmd", "run", "muar_arm", "lessons", "sft", "lora", "service", "decision", "endpoint",
+              "selfdesign", "sft_recipe"}
 
 CODE_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # .../platform
 

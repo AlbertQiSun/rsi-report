@@ -340,6 +340,22 @@ def fake_action(args: argparse.Namespace) -> int:
         n = int(os.environ.get("RSI_FAKE_SFT_N", "64"))
         open(os.path.join(out, "train.jsonl"), "w").write("{}\n" * n)
         print(json.dumps({"n_examples": n, "heldout_overlap": 0, "out": out}))
+    elif args.what == "selfdesign":
+        out = spec["out_dir"]
+        os.makedirs(out, exist_ok=True)
+        rp = os.path.join(out, "recipe.json")
+        json.dump({"include": ["accepted"], "lora": {"rank": 16, "alpha": 32, "lr": 1e-4, "epochs": 2},
+                   "round": spec.get("round"), "n_prev": len(spec.get("previous") or []),
+                   "fb_dirs": [len(p["feedback"]["this"]) for p in spec.get("previous") or []]}, open(rp, "w"))
+        print(json.dumps({"recipe_path": rp, "n_selected": 64, "out_dir": out}))
+    elif args.what == "sft_recipe":
+        out = spec["out"]
+        os.makedirs(out, exist_ok=True)
+        n = int(os.environ.get("RSI_FAKE_SFT_N", "64"))
+        open(os.path.join(out, "train.jsonl"), "w").write("{}\n" * n)
+        json.dump({"n_train": n, "n_valid": 0}, open(os.path.join(out, "manifest.json"), "w"))
+        print(json.dumps({"n_examples": n, "heldout_overlap": 0, "out": out, "recipe_path": spec["recipe_path"],
+                          "match_manifest": spec.get("match_manifest")}))
     elif args.what == "endpoint":
         print(json.dumps({"n_artifacts": spec.get("top_k"), "seeds": spec.get("seeds"), "results": []}))
     else:

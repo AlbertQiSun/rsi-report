@@ -239,6 +239,31 @@ class ActionStep(Step):
             return {"run_dirs": srcs, "accepted_only": bool(self.cfg.get("accepted_only", True)),
                     "placebo": bool(self.cfg.get("placebo")),
                     "out": self.c.expand(self.cfg.get("out") or os.path.join(self.c.dir, "sft", self.id))}
+        if k == "selfdesign":
+            def dirs(sid):
+                st = self.c.steps[sid]
+                return st.done_dirs() if isinstance(st, MuarArmStep) else st.run_dirs()
+            prev = []
+            for p in self.cfg.get("previous") or []:
+                d_out = self.c.steps[p["design"]].outputs() or {}
+                s_out = self.c.steps[p["sft"]].outputs() or {}
+                prev.append({"recipe_path": d_out.get("recipe_path"),
+                             "manifest_path": os.path.join(s_out.get("out") or "", "manifest.json"),
+                             "feedback": {"this": dirs(p["fb_this"]), "m0": dirs(p["fb_m0"]), "m1": dirs(p["fb_m1"])}})
+            return {"run_dirs": srcs, "model": self.cfg.get("model", "improver"),
+                    "gateway_url": self.c.expand(self.c.cfg.get("gateway_url", "")),
+                    "token_path": self.c.ctx.get("token"), "run": self.c.camp_run, "gen": int(self.cfg.get("gen", 1)),
+                    "round": int(self.cfg.get("round", 1)), "previous": prev,
+                    "sref_path": self.c.expand(self.c.cfg["muar"].get("sref", "")),
+                    "out_dir": self.c.expand(self.cfg.get("out_dir") or os.path.join(self.c.dir, "selfdesign", self.id))}
+        if k == "sft_recipe":
+            d_out = self.c.steps[self.cfg["recipe_from"]].outputs() or {}
+            match = self.cfg.get("match_n_of")
+            return {"run_dirs": srcs, "recipe_path": d_out.get("recipe_path"),
+                    "random_placebo": bool(self.cfg.get("random_placebo")), "salt": self.cfg.get("salt", self.id),
+                    "match_manifest": os.path.join((self.c.steps[match].outputs() or {}).get("out") or "",
+                                                   "manifest.json") if match else None,
+                    "out": self.c.expand(self.cfg.get("out") or os.path.join(self.c.dir, "sft", self.id))}
         if k == "endpoint":
             return {"run_dirs": srcs, "top_k": int(self.cfg.get("top_k", 3)), "seeds": self.cfg.get("seeds", []),
                     "include_start": self.c.expand(self.cfg.get("include_start") or ""),
@@ -300,7 +325,7 @@ class ActionStep(Step):
             self.finish(False, out, [f"rc={res.get('rc')}"])
             return
         checks = dict(self.cfg.get("checks") or {})
-        if self.cfg["kind"] == "sft" and self.cfg.get("min_examples"):
+        if self.cfg["kind"] in ("sft", "sft_recipe") and self.cfg.get("min_examples"):
             checks.setdefault("n_examples", f">= {self.cfg['min_examples']}")
             checks.setdefault("heldout_overlap", "<= 0")
             out.setdefault("heldout_overlap", 0)
@@ -780,6 +805,12 @@ class LoraStep(Step):
                     argv = self.c.build_cmd(key, sft_dir=sft_dir, adapter_out=out, gpu=self.gpu(),
                                             est_s=float(self.cfg.get("est_train_s", 2700)))
                     argv, env = self.c.remote_wrap(self.cfg, argv)
+                    if job.get("recipe_from") and not self.c.dry:   # U_sd: LoRA args chosen by the model
+                        from rsi.update.selfdesign import lora_args
+                        rp = (self.c.steps[job["recipe_from"]].outputs() or {}).get("recipe_path")
+                        env = dict(env or self.c.child_env())
+                        env["LORA_ARGS"] = lora_args(json.load(open(rp)))
+                        self.c.log(f"{self.id}: {name} LORA_ARGS={env['LORA_ARGS']}")
                     self.st["proc"] = self.c.procs.launch(argv, log=self.step_dir(f"train-{name}.txt"),
                                                           result=self.step_dir(f"train-{name}.json"), env=env)
                     self.st["proc"]["adapter_out"] = out
@@ -1128,6 +1159,7 @@ class DecisionStep(Step):
 # ===========================================================================
 
 KINDS = {"cmd": ActionStep, "lessons": ActionStep, "sft": ActionStep, "endpoint": ActionStep, "run": RunStep,
+         "selfdesign": ActionStep, "sft_recipe": ActionStep,
          "muar_arm": MuarArmStep, "lora": LoraStep, "service": ServiceStep, "decision": DecisionStep}
 
 

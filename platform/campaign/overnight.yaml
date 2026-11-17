@@ -769,6 +769,196 @@ steps:
   set_flags: {uw3_pass: pass}
   plan: "11-18 ≈07:00"
 
+# ═══════ U_sd: the improver designs its own update recipe (SEAL-style), 2 rounds with train-task feedback ═══════
+# added 11-18 08:xx at the user's request (REPORT_LOG H7/H8). Pool = D_0 (mu_g0) only, the same pool M1 was
+# trained on, so sd1 vs M1 isolates "recipe chosen by the model" vs "recipe fixed by us". Control per round:
+# the same number of calls drawn at random from the legal pool, trained with the same LoRA args (sdr*).
+# Feedback for round 2 = sd1 on the TRAIN tasks with seeds d1, paired with M0 (mu_d0p) and M1 (mu_d1).
+# LoRA on lanes 5 and 4 (cf_* / ladder_nc NanoChat lanes) so lane 2 (nc_g0_cc) keeps running.
+- id: sd_design1
+  phase: 3
+  kind: selfdesign
+  needs: [mu_g0]
+  sources: [mu_g0]
+  model: improver
+  round: 1
+  gen: 1
+  est_s: 600
+  timeout_s: 3600
+
+- id: sft_sd1
+  phase: 3
+  kind: sft_recipe
+  needs: [sd_design1]
+  sources: [mu_g0]
+  recipe_from: sd_design1
+  min_examples: 40
+  est_s: 300
+
+- id: sft_sdr1
+  phase: 3
+  kind: sft_recipe
+  needs: [sd_design1, sft_sd1]
+  sources: [mu_g0]
+  recipe_from: sd_design1
+  random_placebo: true
+  match_n_of: sft_sd1
+  min_examples: 40
+  est_s: 300
+
+- id: lora_sd1
+  phase: 3
+  kind: lora
+  needs: [sft_sd1]
+  holds: [gpu5]
+  lane: 5
+  gen: 1
+  jobs: [{name: sd1, sft: sft_sd1, recipe_from: sd_design1}]
+  est_train_s: 2700
+  train_timeout_s: 4500
+
+- id: lora_sdr1
+  phase: 3
+  kind: lora
+  needs: [sft_sdr1]
+  holds: [gpu4]
+  lane: 4
+  gen: 1
+  jobs: [{name: sdr1, sft: sft_sdr1, recipe_from: sd_design1}]
+  est_train_s: 2700
+  train_timeout_s: 4500
+
+- id: mu_sd1t                # feedback for round 2: sd1 on TRAIN tasks, seeds d1 (paired with mu_d0p, mu_d1)
+  phase: 3
+  kind: muar_arm
+  needs: [lora_sd1]
+  splits: train
+  seeds: d1
+  model: improver@sd1
+  gen: 1
+  est_s: 2400
+
+- id: mu_sd1
+  phase: 3
+  kind: muar_arm
+  needs: [lora_sd1]
+  splits: heldout
+  seeds: heldout
+  model: improver@sd1
+  gen: 1
+  est_s: 2400
+
+- id: mu_sdr1
+  phase: 3
+  kind: muar_arm
+  needs: [lora_sdr1]
+  splits: heldout
+  seeds: heldout
+  model: improver@sdr1
+  gen: 1
+  est_s: 2400
+
+- id: sd_design2
+  phase: 3
+  kind: selfdesign
+  needs: [mu_sd1t, sft_sd1, sd_design1]
+  after: [mu_d0p, mu_d1]
+  sources: [mu_g0]
+  model: improver
+  round: 2
+  gen: 2
+  previous: [{design: sd_design1, sft: sft_sd1, fb_this: mu_sd1t, fb_m0: mu_d0p, fb_m1: mu_d1}]
+  est_s: 600
+  timeout_s: 3600
+
+- id: sft_sd2
+  phase: 3
+  kind: sft_recipe
+  needs: [sd_design2]
+  sources: [mu_g0]
+  recipe_from: sd_design2
+  min_examples: 40
+  est_s: 300
+
+- id: sft_sdr2
+  phase: 3
+  kind: sft_recipe
+  needs: [sd_design2, sft_sd2]
+  sources: [mu_g0]
+  recipe_from: sd_design2
+  random_placebo: true
+  match_n_of: sft_sd2
+  min_examples: 40
+  est_s: 300
+
+- id: lora_sd2
+  phase: 3
+  kind: lora
+  needs: [sft_sd2]
+  after: [lora_sd1]
+  holds: [gpu5]
+  lane: 5
+  gen: 2
+  jobs: [{name: sd2, sft: sft_sd2, recipe_from: sd_design2}]
+  est_train_s: 2700
+  train_timeout_s: 4500
+
+- id: lora_sdr2
+  phase: 3
+  kind: lora
+  needs: [sft_sdr2]
+  after: [lora_sdr1]
+  holds: [gpu4]
+  lane: 4
+  gen: 2
+  jobs: [{name: sdr2, sft: sft_sdr2, recipe_from: sd_design2}]
+  est_train_s: 2700
+  train_timeout_s: 4500
+
+- id: mu_sd2
+  phase: 3
+  kind: muar_arm
+  needs: [lora_sd2]
+  splits: heldout
+  seeds: heldout
+  model: improver@sd2
+  gen: 2
+  est_s: 2400
+
+- id: mu_sdr2
+  phase: 3
+  kind: muar_arm
+  needs: [lora_sdr2]
+  splits: heldout
+  seeds: heldout
+  model: improver@sdr2
+  gen: 2
+  est_s: 2400
+
+- id: dec_sd1
+  phase: 3
+  kind: decision
+  needs: [mu_sd1, mu_a2]
+  after: [mu_sdr1, mu_a0b]
+  arm: mu_sd1
+  base: mu_a2                # model-chosen recipe vs our fixed recipe (same pool D_0)
+  placebo: mu_sdr1           # same size, random calls, same LoRA args
+  aa: [mu_a0a, mu_a0b]
+  also: [{name: "SD1 vs M0", arm: mu_sd1, base: mu_a0a}]
+  label: "U_sd round 1: model-designed recipe vs fixed recipe (M1)"
+
+- id: dec_sd2
+  phase: 3
+  kind: decision
+  needs: [mu_sd2, mu_sd1]
+  after: [mu_sdr2, mu_a0b]
+  arm: mu_sd2
+  base: mu_sd1               # did one round of feedback improve the self-designed update?
+  placebo: mu_sdr2
+  aa: [mu_a0a, mu_a0b]
+  also: [{name: "SD2 vs M0", arm: mu_sd2, base: mu_a0a}, {name: "SD2 vs M1", arm: mu_sd2, base: mu_a2}]
+  label: "U_sd round 2: redesigned recipe after train-task feedback vs round 1"
+
 # ═══════ NanoChat continue-from-frontier (CFF): 4 arms × 3 reps × 12 trials, one lane per run ═══════
 # Every arm starts from a* = the best artifact of nc_g0 with the same nc_g0 history; only the improver
 # differs. Each run is pinned to one lane; arms rotate over lanes between reps (lane counterbalancing).
