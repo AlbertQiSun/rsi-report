@@ -305,6 +305,8 @@ steps:
     policy_cfg: {threads: 2, trials_per_thread: 30}
     budget: {trials: 60}
     rng_seed: 1100
+    # 27B thinks long: at 8192 output tokens 8/48 calls hit finish_reason=length and both threads retired after 2 trials (11-18 00:46)
+    harness: {max_output_tokens: 32768}
   overlays: [{when: nanochat_noisy, set: {policy_cfg: {confirm_seeds: [1]}, budget: {trials: 48}}}]
   stop_when_trials: 60
   est_trial_s: 420           # lane-bound: one lane ≈ 8.5 evals/h 〔估算〕
@@ -1007,7 +1009,7 @@ steps:
   requires_flags: [nanochat, ladder27b_remote]
   plan: "11-18 15:30–21:00 lanes 2,5"
   run: {policy: karpathy_greedy, model: ladder-27b, lanes: [2, 5], policy_cfg: {threads: 2}, budget: {trials: 60},
-        rng_seed: 1101}
+        rng_seed: 1101, harness: {max_output_tokens: 32768}}
   stop_when_trials: 60
   est_trial_s: 330
   est_s: 19800
