@@ -19,6 +19,8 @@
 # dropout 0.05, lr 1e-4 cosine with 5% warmup, 2 epochs, 8 examples per optimizer step, max_len 6144,
 # gradient checkpointing, BF16 weights, loss on the final assistant turn only, best-by-valid checkpoint,
 # hard stop at 55 min (LORA_TIME_LIMIT_MIN). Extra flags for rsi.update.lora_train go in LORA_ARGS.
+# Other base models: RSI_BASE_MODEL=Qwen/Qwen3.8-27B with <gpu>=0,1 and RSI_LORA_DEVICE_MAP=auto (layers split
+# over both GPUs; gradient checkpointing stays on), e.g. under srun --gres=gpu:a100:2 pass "$CUDA_VISIBLE_DEVICES".
 set -euo pipefail
 
 if [ $# -ne 3 ]; then

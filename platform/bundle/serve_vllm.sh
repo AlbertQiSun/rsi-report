@@ -68,7 +68,7 @@ PORTS=${RSI_PORTS:-$R/run/ports.json}
 case "$SIZE" in
   9b)  HF_ID=Qwen/Qwen3.5-9B;  NAME=improver
        MML=${MAX_MODEL_LEN:-131072}; GMU=${GPU_MEM_UTIL:-0.85} ;;
-  27b) HF_ID=Qwen/Qwen3.8-27B; NAME=ladder-27b
+  27b) HF_ID=Qwen/Qwen3.8-27B; NAME=${SERVED_NAME:-ladder-27b}   # SERVED_NAME: a second 27B base, e.g. ladder-27b-evo
        if [[ $TP -ge 2 ]]; then MML=${MAX_MODEL_LEN:-131072}; GMU=${GPU_MEM_UTIL:-0.90}
        else MML=${MAX_MODEL_LEN:-65536}; GMU=${GPU_MEM_UTIL:-0.92}; fi ;;
   *) usage ;;

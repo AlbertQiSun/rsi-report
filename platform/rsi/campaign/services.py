@@ -115,6 +115,16 @@ def gpu_memory() -> list[dict] | None:
     return rows
 
 
+def clean_slurm_env(env: dict) -> dict:
+    """Env for launching ``srun`` into ANOTHER job from inside a step (same pattern as evald's remote
+    lanes): drop SLURM_* except SLURM_CONF, and the SRUN_/SBATCH_/SALLOC_ inputs."""
+    env = dict(env)
+    for k in list(env):
+        if (k.startswith("SLURM_") and k != "SLURM_CONF") or k.startswith(("SRUN_", "SBATCH_", "SALLOC_")):
+            del env[k]
+    return env
+
+
 def disk_free_gb(path: str) -> float | None:
     try:
         return shutil.disk_usage(path).free / 1e9

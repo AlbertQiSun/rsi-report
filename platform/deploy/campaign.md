@@ -80,6 +80,44 @@
 | µAR held-out，所有臂 | 100–104（与 A0a 配对） |
 | µAR A/A（A0b） | 200–204 |
 
+### 27B 自演化链（11-18 加入，campaign `ovn1118b` 用 `--resume` 接上）
+
+**对称设计**：与 9B 的二阶链用同样的任务、seed、N 和 §1.4 规则，改进者换成 Qwen3.8-27B。
+
+| 项 | 9B 链 | 27B 链 |
+|---|---|---|
+| A0（held-out） | `mu_a0a` | `ladder_mu`（协议完全相同，只换模型） |
+| A/A | `mu_a0b` | `mu_a0b_27b` |
+
+**机器分工**
+
+| 节点 | 用途 |
+|---|---|
+| <node> | 原有 27B（`ladder-27b`），不动 |
+| <node>（job <jobid>，2 × A100） | 先训练，再起服务 |
+
+- **训练**：D 的 `lora_train.sh`，`RSI_BASE_MODEL=Qwen/Qwen3.8-27B`，`RSI_LORA_DEVICE_MAP=auto` 把模型切到两张卡上，开着 gradient checkpointing，单个 adapter 上限 150 分钟。
+- **服务**：训练完以后用 C 的 `serve_vllm.sh 27b slurm --lora --expose` 起第二个 27B base `ladder-27b-evo`（TP=2，adapter 启动时预加载成 `ladder-27b-evo@<name>`），由 ports.json 的 `ladder-27b-evo` 路由。
+- **两者轮流**：训练和服务轮流占用这两张卡，不占任何 eval lane。
+- **启动方式**：都经 `srun --jobid=<jobid> --overlap --ntasks=1 -N1 --gres=gpu:a100:2 --cpu-bind=none` 启动，并清掉 SLURM_*（SLURM_CONF 保留）。
+
+| 时间（〔估算〕） | 跑什么 | 迭代 / 次数 | 自动决定 |
+|---|---|---|---|
+| 11-18 ≈01:00–02:30 | `mu_g0_27b`（27B 在 train 上，8 × 5 × 12 = 480 个提案）→ D_0(27B)；`mu_a0b_27b`（27B 的 A/A） | 27B 一步 µAR ≈ 20 秒，与 9B 共用 24 个 CPU 槽，9B 优先 | — |
+| ≈02:30–04:30 | U_s：27B 自己写 lessons，再写一份等长的 placebo；`mu_a1_27b`、`mu_a1p_27b` | U_s(27B) 第 1 代 | ≈04:30 **Δ₂(0) U_s [27B]**，与 9B 的那一行并排 |
+| ≈02:40–07:40 | SFT（≥ 40 条被接受的步骤）→ 在 <node> 上训 LoRA m1-27b、m1p-27b | 2 个 adapter × ≈2.5 小时 | 不满 40 条 → 跳过 U_w(27B) |
+| ≈07:40–09:30 | 起 `ladder-27b-evo` 加两个 adapter → `mu_a2_27b`、`mu_a2p_27b`，以及 D_1(27B) → 停服务 | | ≈09:30 **Δ₂(0) U_w [27B]**，与 9B 并排 |
+| ≈09:40–16:30 | 可选第 2 代：m2-27b = LoRA(D_0 ∪ D_1)，对照 m2c-27b = LoRA(D_0 ∪ D_0')，然后起服务 → A3、A3' | 2 个 adapter | 11-19 04:00 前还没开始就跳过；M1(27B) 显著变差也不做。≈16:30 **Δ₂(1) [27B]** |
+
+**怎么看结果**：Δ₂(9B) 与 Δ₂(27B) 并排写在下面两处：
+
+- `runs/campaign-ovn1118b/decisions.json` 的 `_9b_vs_27b` 键：U_s 第 1 代、U_w 第 1 代、U_w 第 2 代各一行；
+- `campaign_status.md`：每次相关判定之后加一行"Δ₂ 9B vs 27B"，每小时一行里也有。
+
+**混杂说明**：U_w(27B) 的臂在 <node> 的服务实例上跑，基线 `ladder_mu` 在 <node> 上。两边权重、dtype、TP 和 vLLM 参数都相同，但不是同一个进程。
+
+**截止时间**：故意放宽。重启比计划晚的话，链条只会往后推，不会被跳过。
+
 ### 备用方案（闸门不过或阶段超时）
 
 | 情况 | 自动做法 |
@@ -165,6 +203,23 @@ skip: [pol_apex]                 # 跳过尚未开始的步骤
 stop: [pol_naive]                # 平稳停止某个正在跑的步骤
 flags: {nanochat_noisy: true}    # 直接改 flag
 ```
+
+## 改了 yaml 以后让正在跑的 campaign 生效
+
+调度器只在启动时读一次 yaml，所以新增的步骤要等它重启后才会出现。做法：
+
+1. 先把集群上的代码更新到包含改动的提交。
+2. 给调度器进程发 SIGTERM。
+
+```bash
+srun --jobid=<jobid> --overlap --ntasks=1 -N1 bash -c \
+  'cd $R/platform && $SCRATCH/miniconda3/envs/rsi/bin/python -m rsi.campaign --config campaign/overnight.yaml --check > /dev/null \
+   && kill -TERM $(cat $R/runs/campaign-ovn1118b/campaign.lock)'
+```
+
+- **在 `run_campaign.sh` 下运行时**：外层循环会在 60 秒内带 `--resume` 重启它，读入新 yaml。已有步骤保持原状态；正在跑的 run、LoRA 训练和服务都在各自的 session 里继续，并被重新接管；新步骤以 pending 加入。
+- **不是在 `run_campaign.sh` 下运行时**：kill 之后再执行一次"正式启动"那条命令。
+- **确认生效**：`campaign.log` 里出现 `resuming`，`campaign_status.md` 里出现 "campaign resumed"。
 
 ## 崩溃以后
 

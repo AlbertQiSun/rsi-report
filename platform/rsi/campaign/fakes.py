@@ -23,7 +23,7 @@ import signal
 import sys
 import time
 
-UP_FILE_SERVICES = {"vllm_27b"}
+UP_FILE_SERVICES = {"vllm_27b", "evo27b"}
 
 
 def _scale() -> float:
@@ -159,7 +159,7 @@ def _bias(cfg: dict) -> float:
     scaffold = str(cfg.get("scaffold_dir") or "")
     b = 0.0
     if "@" in model:
-        name = model.split("@", 1)[1]
+        name = model.split("@", 1)[1].removesuffix("-27b")
         b += 0.004 if name.endswith("p") else (0.02 if name.endswith("c") else 0.05)
     if "ladder" in model:
         b += 0.06

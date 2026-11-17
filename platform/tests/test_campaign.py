@@ -24,7 +24,8 @@ from rsi.campaign.config import load_config, parse_time
 HERE = os.path.dirname(os.path.abspath(__file__))
 PLATFORM = os.path.dirname(HERE)
 CONFIG = os.path.join(PLATFORM, "campaign", "overnight.yaml")
-CAMP = "runs/campaign-ovn1118"
+CID = load_config(CONFIG, root_override="/tmp/x")["campaign"]   # e.g. ovn1118b
+CAMP = f"runs/campaign-{CID}"
 
 
 def env(**extra):
@@ -97,8 +98,10 @@ def test_plan_fits_hold_window():
         assert s.get("plan"), f"{s['id']} has no planned window for the human table"
     # LoRA always pauses lane 2 and serialises on gpu2; the remote 27B never borrows a lane
     for s in cfg["steps"]:
-        if s["kind"] == "lora":
+        if s["kind"] == "lora" and not s.get("remote"):
             assert s["holds"] == ["gpu2"] and int(s.get("lane", 2)) == 2
+        if s["kind"] in ("lora", "service") and s.get("remote"):   # 27B chain on node-d: no eval lane
+            assert s["lane"] is None and s["holds"] == ["gpu-node-d"] and s["remote"]["jobid"] == 10000004
     assert steps["ladder_nc"]["after"] == steps["nc_g0"]["after"], "27B ladder starts with G0"
     assert "gpu2" not in steps["ladder_nc"]["holds"]
     # the LoRA lane is not one the 9B G0 (or the ladder) depends on; G0 uses three dedicated lanes
@@ -149,7 +152,10 @@ def test_full_campaign_dry_run(tmp_path):
             "mu_a0a", "mu_a0b", "us_lessons_mu", "mu_a1", "mu_a1p", "dec_us", "sft_m1", "sft_m1p", "lora_g1",
             "mu_a2", "mu_a2p", "dec_g1", "lora_g2", "mu_a3", "mu_a3c", "dec_g2", "us_lessons_nc", "cf_m0_r1",
             "cf_s1_r1", "cf_m1_r1", "cf_m1p_r1", "cf_m0_r2", "cf_s1_r2", "cf_m1_r2", "cf_m1p_r2",
-            "pol_recursive", "pol_naive", "nc_weboff", "endpoint"]
+            "pol_recursive", "pol_naive", "nc_weboff", "endpoint",
+            # 27B self-evolution chain (node-d)
+            "mu_g0_27b", "mu_a0b_27b", "us_lessons_mu_27b", "mu_a1_27b", "mu_a1p_27b", "dec_us_27b",
+            "sft_m1_27b", "lora_g1_27b", "serve_evo_g1", "mu_a2_27b", "mu_a2p_27b", "mu_d1_27b", "dec_g1_27b"]
     bad = {k: (S[k]["status"], S[k].get("reason")) for k in must if S[k]["status"] != "done"}
     assert not bad, bad
     for k, v in S.items():  # whatever was skipped was skipped for a stated reason
@@ -160,10 +166,11 @@ def test_full_campaign_dry_run(tmp_path):
 
     # trial-count trigger: G0 stopped at 2×30 trials, and the CFF arms started only after it ended
     runs = os.path.join(tmp_path, "runs")
-    assert analysis.run_stats(os.path.join(runs, "ovn1118-nc-g0", "events.jsonl"))["n_trials"] == 90
+    noisy = load_config(CONFIG, root_override="/tmp/x")["flags"].get("nanochat_noisy")
+    assert analysis.run_stats(os.path.join(runs, f"{CID}-nc-g0", "events.jsonl"))["n_trials"] == (72 if noisy else 90)
     for cf in ("cf_m0_r1", "cf_s1_r1", "cf_m1_r1"):
         assert S[cf]["t_start"] >= S["nc_g0"]["t_end"]
-        assert analysis.run_stats(os.path.join(runs, f"ovn1118-{cf.replace('_', '-')}", "events.jsonl"))["n_trials"] == 12
+        assert analysis.run_stats(os.path.join(runs, f"{CID}-{cf.replace('_', '-')}", "events.jsonl"))["n_trials"] == 12
     # ladder ran in parallel with G0 (own node), not after it
     assert abs(S["ladder_nc"]["t_start"] - S["nc_g0"]["t_start"]) < 1800
 
@@ -175,7 +182,16 @@ def test_full_campaign_dry_run(tmp_path):
     adapters = [json.loads(l) for l in open(os.path.join(tmp_path, CAMP, "fake", "adapters.jsonl"))]
     assert {"m1", "m1p", "m2", "m2c"} <= {a["name"] for a in adapters}
     for a in adapters:
-        assert any(lo <= a["vt"] <= hi for lo, hi in windows), a
+        if not a["name"].endswith("-27b"):  # 9B adapters: loaded while lane 2 is paused
+            assert any(lo <= a["vt"] <= hi for lo, hi in windows), a
+    # 27B chain: trained on node-d (no eval lane paused), served only after training, arms after serving
+    assert {"m1-27b", "m1p-27b"} <= {a["name"] for a in adapters}
+    assert S["serve_evo_g1"]["t_start"] >= S["lora_g1_27b"]["t_end"]
+    assert S["mu_a2_27b"]["t_start"] >= S["serve_evo_g1"]["t_start"]
+    assert S["serve_evo_g1"]["t_end"] >= S["mu_a2_27b"]["t_end"]   # served until its arms finished
+    dj = json.load(open(os.path.join(tmp_path, CAMP, "decisions.json")))
+    pairs = {r["comparison"]: r for r in dj["_9b_vs_27b"]}
+    assert pairs["U_s gen 1"]["9B"] and pairs["U_s gen 1"]["27B"] and pairs["U_w gen 1"]["27B"]
     assert not any(v["paused"] for v in lanes_json(tmp_path).values())
     # M1 arms ran only after the adapter was loaded
     m1 = next(a for a in adapters if a["name"] == "m1")
@@ -190,7 +206,7 @@ def test_full_campaign_dry_run(tmp_path):
     assert kinds.count("weights_update") >= 4 and kinds.count("lessons_update") >= 3 and "decision" in kinds
     assert any(e.get("campaign_ev") == "lane_pause" for e in evs)
     md = open(os.path.join(runs, "campaign_status.md")).read()
-    assert md.count("| P") >= 20 and "DECISION" in md and "campaign END" in md
+    assert md.count("| P") >= 20 and "DECISION" in md and "campaign END" in md and "9B vs 27B" in md
     assert no_live_children(tmp_path)
 
 
@@ -216,7 +232,7 @@ def test_resume_after_crash(tmp_path):
     S = st["steps"]
     assert S["lora_g1"]["status"] == "done" and S["dec_g1"]["status"] == "done"
     assert S["nc_g0"]["restarts"] >= 1, "injected orchestrator crash must be restarted with --resume"
-    nc = events.read_events(os.path.join(tmp_path, "runs", "ovn1118-nc-g0", "events.jsonl"))
+    nc = events.read_events(os.path.join(tmp_path, "runs", f"{CID}-nc-g0", "events.jsonl"))
     assert sum(e["ev"] == "run_start" for e in nc) == 1, "a resumed run must not start over"
     evs = camp_events(tmp_path)
     assert sum(e["ev"] == "run_start" for e in evs) == 1
@@ -259,7 +275,7 @@ def test_stop_file_and_resume(tmp_path):
     assert r.returncode == 0, r.stderr[-2000:]
     S = state(tmp_path)["steps"]
     assert S["lora_g1"]["status"] == "done"
-    nc = events.read_events(os.path.join(tmp_path, "runs", "ovn1118-nc-g0", "events.jsonl"))
+    nc = events.read_events(os.path.join(tmp_path, "runs", f"{CID}-nc-g0", "events.jsonl"))
     assert sum(e["ev"] == "run_start" for e in nc) == 1
     log = lane_log(tmp_path)
     assert [e["op"] for e in log][-1] == "resume"
@@ -347,3 +363,32 @@ def test_decision_action_uses_worker_d_analysis(tmp_path):
     assert res["main"]["delta"] > 0 and res["also"][0]["name"] == "B vs AA"
     assert set(res["criteria"]) >= {"ci_lower_gt_0", "gt_2x_aa", "beats_placebo"}
     assert do_decision({**spec, "arms_files": {}})["nodata"]
+
+
+def test_remote_27b_commands(tmp_path):
+    """Real-mode command lines for the 27B chain: srun into job 10000004 with a cleaned SLURM env."""
+    from rsi.campaign.scheduler import Campaign
+
+    cfg = load_config(CONFIG, root_override=str(tmp_path))
+    camp = Campaign(cfg, dry_run=False, quiet=True)
+    camp.clock = __import__("rsi.campaign.config", fromlist=["Clock"]).Clock()
+    camp.state = {"steps": {}, "flags": {}, "paused_lanes": {}}
+    lora = camp.steps["lora_g1_27b"]
+    argv = camp.build_cmd(lora.cfg["train_cmd"], sft_dir="/s", adapter_out="/a/m1-27b", gpu=lora.gpu())
+    os.environ["SLURM_JOB_ID"] = "10000001"
+    try:
+        full, envr = camp.remote_wrap(lora.cfg, argv)
+    finally:
+        os.environ.pop("SLURM_JOB_ID", None)
+    assert full[:5] == ["srun", "--jobid=10000004", "--overlap", "--ntasks=1", "-N1"]
+    assert "--gres=gpu:a100:2" in full and "--cpu-bind=none" in full
+    assert "RSI_BASE_MODEL=Qwen/Qwen3.8-27B" in full and "RSI_LORA_DEVICE_MAP=auto" in full
+    assert full[-3:] == [os.path.join(cfg["_ctx"]["bundle"], "lora_train.sh"), "/s", "/a/m1-27b"]
+    assert "SLURM_JOB_ID" not in envr
+    svc = camp.steps["serve_evo_g1"]
+    svc.c.steps["lora_g1_27b"].st["adapters"] = {"m1-27b": "/a/m1-27b", "m1p-27b": "/a/m1p-27b"}
+    mods = ",".join(f"{n}={p}" for n, p in sorted(svc.lora_modules().items()))
+    argv = camp.build_cmd(svc.cfg["cmd"], gpu=svc.gpu(), lora_modules=mods)
+    assert "SERVED_NAME=ladder-27b-evo" in argv and "LORA_MODULES=m1-27b=/a/m1-27b,m1p-27b=/a/m1p-27b" in argv
+    assert argv[-4:] == ["27b", "slurm", "--lora", "--expose"]
+    assert svc.lane() is None and lora.lane() is None and camp.steps["lora_g1"].lane() == 2

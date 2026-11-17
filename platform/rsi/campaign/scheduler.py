@@ -29,7 +29,7 @@ from typing import Any
 from rsi import events
 from rsi.campaign import analysis
 from rsi.campaign.config import CODE_ROOT, Clock, deep_merge, expand, fmt_time, run_checks
-from rsi.campaign.services import (GatewayLoraLoader, HttpProbe, Ports, disk_free_gb, gpu_memory,
+from rsi.campaign.services import (GatewayLoraLoader, HttpProbe, Ports, clean_slurm_env, disk_free_gb, gpu_memory,
                                    make_eval_client)
 from rsi.runs import atomic_write_json, read_json
 
@@ -61,12 +61,12 @@ class Procs:
         self.c = camp
         self.popen: dict[int, subprocess.Popen] = {}
 
-    def launch(self, argv: list[str], *, log: str, result: str) -> dict:
+    def launch(self, argv: list[str], *, log: str, result: str, env: dict | None = None) -> dict:
         os.makedirs(os.path.dirname(result), exist_ok=True)
         if os.path.exists(result):
             os.replace(result, result + f".old{int(time.time())}")
         full = [sys.executable, "-m", "rsi.campaign.runner", "--result", result, "--log", log, "--"] + argv
-        p = subprocess.Popen(full, cwd=CODE_ROOT, env=self.c.child_env(), start_new_session=True,
+        p = subprocess.Popen(full, cwd=CODE_ROOT, env=env or self.c.child_env(), start_new_session=True,
                              stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         self.popen[p.pid] = p
         return {"pid": p.pid, "result": result, "log": log, "t_launch": self.c.now(), "argv": argv}
@@ -672,10 +672,15 @@ class MuarArmStep(Step):
 class LoraStep(Step):
     """Pause an eval lane, train adapters on its GPU, load them into vLLM, resume the lane."""
 
-    def lane(self) -> int:
+    def lane(self) -> int | None:
+        """None (``lane: null``) = training on a separate node; no eval lane is paused."""
+        if "lane" in self.cfg and self.cfg["lane"] is None:
+            return None
         return int(self.cfg.get("lane", self.c.cfg.get("lora_lane", 2)))
 
-    def gpu(self) -> int:
+    def gpu(self) -> int | str:
+        if self.lane() is None:
+            return self.cfg.get("gpu", "slurm")
         try:
             for l in self.c.evald.lanes():
                 if int(l.get("lane")) == self.lane() and l.get("gpu") is not None:
@@ -685,7 +690,8 @@ class LoraStep(Step):
         return int((self.c.cfg.get("lane_gpus") or {}).get(self.lane(), self.lane()))
 
     def start(self) -> None:
-        self.st.update({"stage": "pause", "job": 0, "adapters": {}, "tries": {}})
+        self.st.update({"stage": "pause" if self.lane() is not None else "train", "job": 0, "adapters": {},
+                        "tries": {}})
         self.set("running")
         self.poll()
 
@@ -693,6 +699,10 @@ class LoraStep(Step):
         super().recover()
         if self.st.get("proc") and self.c.procs.poll(self.st["proc"])[0] == "lost":
             self.st["proc"] = None  # the train stage relaunches the current job
+        if self.lane() is None:
+            if self.st.get("stage") == "stopped":
+                self.st["stage"] = "train"
+            return
         if self.st.get("stage") == "stopped" or (
                 self.st.get("stage") in ("wait_idle", "train") and str(self.lane()) not in self.c.state["paused_lanes"]):
             self.st["stage"] = "pause"  # trained adapters are kept; training continues with the next job
@@ -704,6 +714,8 @@ class LoraStep(Step):
 
     def release_lane(self) -> None:
         lane = self.lane()
+        if lane is None:
+            return
         if self.c.state["paused_lanes"].get(str(lane)) == self.id:
             try:
                 self.c.evald.resume_lane(lane)
@@ -764,10 +776,12 @@ class LoraStep(Step):
                     sft = self.c.steps[job["sft"]]
                     sft_dir = (sft.outputs() or {}).get("out") or sft.spec()["out"]
                     out = os.path.join(self.c.ctx["adapters"], name)
-                    argv = self.c.build_cmd("lora_train", sft_dir=sft_dir, adapter_out=out, gpu=self.gpu(),
+                    key = "lora_train" if self.c.dry else self.cfg.get("train_cmd", "lora_train")
+                    argv = self.c.build_cmd(key, sft_dir=sft_dir, adapter_out=out, gpu=self.gpu(),
                                             est_s=float(self.cfg.get("est_train_s", 2700)))
+                    argv, env = self.c.remote_wrap(self.cfg, argv)
                     self.st["proc"] = self.c.procs.launch(argv, log=self.step_dir(f"train-{name}.txt"),
-                                                          result=self.step_dir(f"train-{name}.json"))
+                                                          result=self.step_dir(f"train-{name}.json"), env=env)
                     self.st["proc"]["adapter_out"] = out
                     self.c.msg(self.id, f"train {name} on gpu {self.gpu()}", campaign_ev="lora_train_start",
                                lane=lane, adapter=name)
@@ -792,6 +806,18 @@ class LoraStep(Step):
                     else:
                         self.fail(f"training {name} failed")
                 return
+        if stage == "load" and not self.cfg.get("load", True):
+            # adapters are served later by a `service` step that preloads them (LORA_MODULES)
+            for job in jobs:
+                name = job["name"]
+                self.c.state.setdefault("remote_adapters", {})[name] = self.st["adapters"][name]
+                sft = self.c.steps[job["sft"]]
+                self.c.ev("weights_update", agent="campaign", gen=int(self.cfg.get("gen", 1)),
+                          adapter_path=self.st["adapters"][name], n_examples=(sft.outputs() or {}).get("n_examples"),
+                          base_model=self.cfg.get("base_model", self.c.cfg.get("base_model", "improver")),
+                          adapter=name, step=self.id)
+            self.st["stage"] = "resume"
+            stage = "resume"
         if stage == "load":
             for job in jobs:
                 name = job["name"]
@@ -829,9 +855,27 @@ class ServiceStep(Step):
     release_lane = LoraStep.release_lane
 
     def start(self) -> None:
-        self.st.update({"stage": "pause", "restarts_svc": 0})
+        self.st.update({"stage": "pause" if self.lane() is not None else "launch", "restarts_svc": 0})
         self.set("running")
         self.poll()
+
+    def lora_modules(self) -> dict[str, str]:
+        """{adapter name: path} from the lora steps in ``adapters_from`` (preloaded at vLLM start)."""
+        out: dict[str, str] = {}
+        for sid in self.cfg.get("adapters_from") or []:
+            out.update(self.c.steps[sid].st.get("adapters") or {})
+        return out
+
+    def adapters_ready(self) -> bool:
+        mods = self.lora_modules()
+        if not mods:
+            return True
+        if self.c.dry:  # the fake loader stands in for "vLLM listed the preloaded adapter"
+            return all(self.c.loader.load(n, p)[0] for n, p in mods.items())
+        la = self.c.cfg["lora_admin"]
+        ld = GatewayLoraLoader(self.c.expand(la["load_url"]), self.c.expand(la["list_url"]), self.c.ctx.get("token"),
+                               base=self.cfg.get("served_name", "improver"))
+        return all(ld.verify(n) for n in mods)
 
     def recover(self) -> None:
         super().recover()
@@ -839,6 +883,10 @@ class ServiceStep(Step):
             self.st["proc"] = None
             if self.st["stage"] in ("wait_healthy", "serving"):
                 self.st["stage"] = "launch"
+        if self.lane() is None:
+            if self.st.get("stage") in ("stopping", "resume") and self.st.get("stop_reason"):
+                self.st.update({"stage": "launch", "proc": None, "fail": None})
+            return
         if str(self.lane()) not in self.c.state["paused_lanes"] and self.st.get("stage") != "pause":
             self.c.procs.kill(self.st.get("proc"), signal.SIGTERM)
             self.st.update({"stage": "pause", "proc": None, "fail": None})
@@ -860,6 +908,8 @@ class ServiceStep(Step):
         now = self.c.now()
         lane = self.lane()
         stage = self.st["stage"]
+        if stage == "pause" and lane is None:
+            self.st["stage"] = stage = "launch"
         if stage == "pause":
             self.c.evald.pause_lane(lane)
             self.c.state["paused_lanes"][str(lane)] = self.id
@@ -875,15 +925,19 @@ class ServiceStep(Step):
             self.st["stage"] = "launch"
             stage = "launch"
         if stage == "launch":
+            mods = ",".join(f"{n}={os.path.abspath(p)}" for n, p in sorted(self.lora_modules().items()))
             if self.c.dry:
                 argv = self.c.build_cmd("serve", probe=self.cfg["probe"], load_s=self.cfg.get("load_s", 600))
             else:
-                argv = self.c.build_cmd(self.cfg["cmd"], gpu=self.gpu())
-            self.st["proc"] = self.c.procs.launch(argv, log=self.step_dir("serve.txt"), result=self.step_dir("serve.json"))
+                argv = self.c.build_cmd(self.cfg["cmd"], gpu=self.gpu(), lora_modules=mods or None)
+            argv, env = self.c.remote_wrap(self.cfg, argv)
+            self.st["proc"] = self.c.procs.launch(argv, log=self.step_dir("serve.txt"), result=self.step_dir("serve.json"),
+                                                  env=env)
             self.st.update({"stage": "wait_healthy", "t_launch": now})
             return
         if stage == "wait_healthy":
             ok, _ = self.c.probe.check(self.cfg["probe"], self.c.expand(self.cfg.get("url", "")))
+            ok = ok and self.adapters_ready()
             if ok:
                 self.up(True)
                 self.st["stage"] = "serving"
@@ -1046,6 +1100,7 @@ class DecisionStep(Step):
         self.st["out"] = res
         self.c.state["decisions"][self.id] = res
         atomic_write_json(os.path.join(self.c.dir, "decisions.json"), self.c.state["decisions"])
+        self.c.update_pairs()
         m = res.get("main") or {}
         self.c.ev("decision", agent="campaign", gen=int(cfg.get("gen", 1)), trial=None,
                   artifact_hash=str(cfg.get("artifact", cfg["arm"])),
@@ -1055,6 +1110,10 @@ class DecisionStep(Step):
         for flag, key in (cfg.get("set_flags") or {}).items():
             self.c.state["flags"][flag] = bool(res.get(key))
         self.c.status_line(event=f"DECISION {res['label']}: {analysis.fmt_delta(res)} — {str(res.get('reason'))[:300]}")
+        if cfg.get("pair_with") or any(s.cfg.get("pair_with") == self.id for s in self.c.steps.values()):
+            pt = self.c.pairs_text()
+            if pt:
+                self.c.status_line(event=f"Δ₂ 9B vs 27B — {pt}")
         req = cfg.get("require")
         if req and not res.get("nodata"):
             ok, failed = run_checks({"delta": m.get("delta")}, {"delta": req})
@@ -1158,6 +1217,40 @@ class Campaign:
         if self.dry:
             ctx["py"] = sys.executable
         return [expand(tok, ctx, self.ports.resolve) for tok in shlex.split(tmpl)]
+
+    def remote_wrap(self, cfg: dict, argv: list[str]) -> tuple[list[str], dict | None]:
+        """Steps with ``remote: {jobid, srun_args}`` run inside another Slurm job (e.g. the 27B
+        node node-d): ``srun --jobid=J --overlap --ntasks=1 -N1 <srun_args> --cpu-bind=none``,
+        with SLURM_* cleared except SLURM_CONF. Dry-runs ignore it."""
+        rem = cfg.get("remote")
+        if not rem or self.dry:
+            return argv, None
+        pre = ["srun", f"--jobid={rem['jobid']}", "--overlap", "--ntasks=1", "-N1"]
+        pre += [str(a) for a in rem.get("srun_args") or []] + ["--cpu-bind=none"]
+        return pre + argv, clean_slurm_env(self.child_env())
+
+    def update_pairs(self) -> None:
+        """Δ₂(9B) next to Δ₂(27B): every decision with ``pair_with`` forms one row."""
+        def brief(r: dict | None) -> dict | None:
+            if not r:
+                return None
+            m = r.get("main") or {}
+            return {"delta": m.get("delta"), "ci": m.get("ci"), "pass": bool(r.get("pass")),
+                    "harmful": bool(r.get("harmful")), "text": analysis.fmt_delta(r)}
+        rows = []
+        for s in self.steps.values():
+            pw = s.cfg.get("pair_with")
+            if s.cfg["kind"] != "decision" or not pw:
+                continue
+            rows.append({"comparison": s.cfg.get("pair_label", s.id), "steps": {"9B": pw, "27B": s.id},
+                         "9B": brief(self.state["decisions"].get(pw)), "27B": brief(self.state["decisions"].get(s.id))})
+        self.state["pairs"] = rows
+        atomic_write_json(os.path.join(self.dir, "decisions.json"), {**self.state["decisions"], "_9b_vs_27b": rows})
+
+    def pairs_text(self) -> str:
+        rows = [r for r in self.state.get("pairs") or [] if r.get("9B") or r.get("27B")]
+        return "; ".join(f"{r['comparison']}: 9B {(r['9B'] or {}).get('text', 'n/a')} | 27B {(r['27B'] or {}).get('text', 'n/a')}"
+                         for r in rows)
 
     def write_config(self, path: str, obj: dict) -> None:
         os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -1480,6 +1573,8 @@ class Campaign:
             fails = sum(1 for s in self.steps.values() if s.status == "failed")
             skipped = sum(1 for s in self.steps.values() if s.status == "skipped")
             d2 = "; ".join(f"{v.get('label', k)} {analysis.fmt_delta(v)}" for k, v in self.state["decisions"].items()) or "-"
+            if self.pairs_text():
+                d2 += " ‖ 9B vs 27B: " + self.pairs_text()
             lanes = ", ".join(f"L{l} paused by {o}" for l, o in self.state["paused_lanes"].items()) or "all eval lanes up"
             hr = self.state["health"].get("report", {})
             health = ", ".join(f"{k}:{v}" for k, v in hr.items() if not isinstance(v, dict))[:200] or "-"

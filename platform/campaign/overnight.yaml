@@ -76,6 +76,12 @@ commands:     # templates; {config} {out} {sft_dir} {adapter_out} {gpu} {model} 
   serve_27b_local: "bash {bundle}/serve_vllm.sh 27b {gpu}"
   restart_vllm: "bash {bundle}/serve_vllm.sh 9b 0 --lora"
   pack: "tar -czf {R}/out/{campaign}-runs.tgz -C {R} runs"
+  # 27B self-evolution chain on node-d (job 10000004, 2 × A100); both run inside `remote:` srun steps.
+  # Training: D's trainer with the 27B base split over both GPUs (device_map=auto, gradient checkpointing).
+  lora_train_27b: "env RSI_BASE_MODEL=Qwen/Qwen3.8-27B RSI_LORA_DEVICE_MAP=auto LORA_TIME_LIMIT_MIN=150 bash -c 'exec bash \"$0\" \"$1\" \"$2\" \"$CUDA_VISIBLE_DEVICES\"' {bundle}/lora_train.sh {sft_dir} {adapter_out}"
+  # Serving: C's script, second 27B base "ladder-27b-evo" (TP=2, adapters preloaded as ladder-27b-evo@<name>),
+  # exposed through an edge gateway; ports.json key "ladder-27b-evo" -> the main gateway routes it.
+  serve_27b_evo: "env SERVED_NAME=ladder-27b-evo LORA_MODULES={lora_modules} MAX_LORAS=2 bash {bundle}/serve_vllm.sh 27b slurm --lora --expose"
 
 lanes: [1, 2, 3, 4, 5]
 lane_gpus: {1: 1, 2: 2}      # local lanes only; lanes 3-5 live on node-b
@@ -100,6 +106,7 @@ flags:                       # defaults; gates and decisions flip them
   ladder27b_remote: true     # 27B gate on its own node
   uw1_harmful: false
   uw2_harmful: false
+  uw1_27b_harmful: false
 
 health:
   interval_s: 180            # every 3 min
@@ -1079,5 +1086,352 @@ steps:
   est_s: 3600                # 40 evals / ≈42 per h 〔估算〕
   latest_start: "2026-11-19T15:00"
   deadline: "2026-11-19T17:45"
+
+
+# ═══════════════ 27B self-evolution chain (added 11-18 ≈00:40; mirrors the 9B second-order chain) ═══════════════
+# Improver I_0 = Qwen3.8-27B ("ladder-27b", node-c, unchanged). Same tasks, seeds, N and rule as the 9B chain.
+# A0 for 27B = ladder_mu (27B, held-out, seeds 100-104, N 12, karpathy_greedy: identical protocol to mu_a0a).
+# U_w adapters are trained AND served on node-d (job 10000004, 2 × A100): train (both GPUs, device_map) ->
+# serve 27B + adapters (TP=2, LORA_MODULES preloaded) -> held-out arms -> stop -> next generation.
+# Pacing 〔估算〕: 27B µAR step ≈ 20 s (vs 8 s for 9B); a 27B µAR arm ≈ 1.5 h in the shared 24-run CPU pool
+# (these steps come last in the file, so the 9B arms get the pool first); 27B LoRA ≈ 2.5 h per adapter on
+# 2 × A100; 27B vLLM TP=2 start ≈ 15 min. Deadlines are loose on purpose: added to a running campaign, the chain
+# must slip rather than be skipped if the restart happens later than planned. The second-order comparison U_w(27B) uses a different serving
+# instance (node-d) than its base arm ladder_mu (node-c): same weights, dtype, TP and vLLM flags.
+- id: mu_g0_27b              # D_0(27B): 27B on the train tasks, same seeds and N as mu_g0
+  phase: 6
+  kind: muar_arm
+  after: [g2_muar_smoke]
+  requires_flags: [muar, ladder27b_remote]
+  splits: train
+  seeds: g0
+  model: ladder-27b
+  gen: 0
+  plan: "11-18 ≈01:00–02:30"
+  est_s: 5400
+  deadline: "2026-11-18T14:00"
+
+- id: mu_a0b_27b             # A/A for 27B (disjoint seeds); A0a(27B) = ladder_mu
+  phase: 6
+  kind: muar_arm
+  after: [g2_muar_smoke]
+  requires_flags: [muar, ladder27b_remote]
+  splits: heldout
+  seeds: aa
+  model: ladder-27b
+  gen: 0
+  plan: "11-18 ≈01:00–02:30"
+  est_s: 5400
+  deadline: "2026-11-18T16:00"
+
+- id: mu_d0p_27b             # D_0'(27B): more M0 data for the gen-2 control
+  phase: 6
+  kind: muar_arm
+  after: [mu_g0_27b]
+  requires_flags: [muar, ladder27b_remote]
+  splits: train
+  seeds: d1
+  model: ladder-27b
+  gen: 0
+  plan: "11-18 ≈02:30–04:00"
+  est_s: 5400
+  deadline: "2026-11-18T20:00"
+
+- id: us_lessons_mu_27b      # U_s(27B): 27B writes lessons from its own G0
+  phase: 6
+  kind: lessons
+  needs: [mu_g0_27b]
+  sources: [mu_g0_27b]
+  model: ladder-27b
+  gen: 1
+  plan: "11-18 ≈02:30–02:45"
+  est_s: 900
+
+- id: us_placebo_mu_27b
+  phase: 6
+  kind: lessons
+  needs: [mu_g0_27b, us_lessons_mu_27b]
+  sources: [mu_g0_27b]
+  generic_placebo: true
+  match_words_of: us_lessons_mu_27b
+  out_dir: "{campaign_dir}/scaffolds/us_placebo_mu_27b-placebo"
+  model: ladder-27b
+  gen: 1
+  plan: "11-18 ≈02:45–03:00"
+  est_s: 900
+
+- id: mu_a1_27b
+  phase: 6
+  kind: muar_arm
+  needs: [us_lessons_mu_27b]
+  splits: heldout
+  seeds: heldout
+  model: ladder-27b
+  scaffold: "lessons:us_lessons_mu_27b"
+  gen: 1
+  plan: "11-18 ≈03:00–04:30"
+  est_s: 5400
+  deadline: "2026-11-18T20:00"
+
+- id: mu_a1p_27b
+  phase: 6
+  kind: muar_arm
+  needs: [us_placebo_mu_27b]
+  splits: heldout
+  seeds: heldout
+  model: ladder-27b
+  scaffold: "lessons:us_placebo_mu_27b"
+  gen: 1
+  plan: "11-18 ≈03:00–04:30"
+  est_s: 5400
+  deadline: "2026-11-18T20:00"
+
+- id: dec_us_27b
+  phase: 6
+  kind: decision
+  needs: [mu_a1_27b, ladder_mu]
+  after: [mu_a1p_27b, mu_a0b_27b]
+  arm: mu_a1_27b
+  base: ladder_mu
+  placebo: mu_a1p_27b
+  aa: [ladder_mu, mu_a0b_27b]
+  label: "Δ₂(0) U_s lessons [27B]"
+  label_if_flag: [muar_gate2_failed, "(Gate 2 failed)"]
+  pair_with: dec_us
+  pair_label: "U_s gen 1"
+  set_flags: {us1_27b_pass: pass}
+  plan: "11-18 ≈04:30"
+
+- id: sft_m1_27b
+  phase: 6
+  kind: sft
+  needs: [mu_g0_27b]
+  sources: [mu_g0_27b]
+  accepted_only: true
+  min_examples: 40           # gate G3
+  plan: "11-18 ≈02:30"
+  est_s: 300
+  on_fail: {fallbacks: [{note: "fewer than 40 accepted 27B steps: U_w(27B) skipped"}]}
+
+- id: sft_m1p_27b
+  phase: 6
+  kind: sft
+  needs: [mu_g0_27b]
+  sources: [mu_g0_27b]
+  placebo: true
+  min_examples: 40
+  plan: "11-18 ≈02:30"
+  est_s: 300
+  on_fail: {fallbacks: [{note: "placebo SFT set (27B) too small"}]}
+
+- id: lora_g1_27b            # node-d, both GPUs; no eval lane involved
+  phase: 6
+  kind: lora
+  needs: [sft_m1_27b, sft_m1p_27b]
+  holds: [gpu-node-d]
+  lane: null
+  remote: {jobid: 10000004, srun_args: ["--gres=gpu:a100:2", "--cpus-per-task=14", "--mem=180G"]}
+  train_cmd: lora_train_27b
+  load: false                # preloaded by serve_evo_g1
+  base_model: Qwen/Qwen3.8-27B
+  gen: 1
+  jobs: [{name: m1-27b, sft: sft_m1_27b}, {name: m1p-27b, sft: sft_m1p_27b}]
+  est_train_s: 9000          # 〔估算〕 ≈2.5 h per adapter
+  train_timeout_s: 12600       # 150-min trainer limit + 27B load/save
+  plan: "11-18 ≈02:40–07:40 (node-d)"
+  est_s: 18000
+  deadline: "2026-11-18T22:00"
+
+- id: serve_evo_g1           # 27B + m1-27b, m1p-27b on node-d (TP=2) until the gen-1 arms are done
+  phase: 6
+  kind: service
+  needs: [lora_g1_27b]
+  holds: [gpu-node-d]
+  lane: null
+  remote: {jobid: 10000004, srun_args: ["--gres=gpu:a100:2", "--cpus-per-task=14", "--mem=180G"]}
+  cmd: serve_27b_evo
+  served_name: ladder-27b-evo
+  adapters_from: [lora_g1_27b]
+  probe: evo27b
+  url: "{url:ladder-27b-evo}/health"
+  up_flag: evo1_up
+  fail_flags: {evo1_failed: true}
+  until: [mu_a2_27b, mu_a2p_27b, mu_d1_27b]
+  load_s: 900
+  start_timeout_s: 2700
+  max_restarts: 1
+  plan: "11-18 ≈07:40–09:30 (node-d)"
+  est_s: 6600
+  deadline: "2026-11-19T04:00"
+
+- id: mu_a2_27b
+  phase: 6
+  kind: muar_arm
+  needs: [lora_g1_27b]
+  wait_for_flags: [evo1_up]
+  skip_if_flags: [evo1_failed]
+  splits: heldout
+  seeds: heldout
+  model: ladder-27b-evo@m1-27b
+  fake: {needs_up: evo27b}
+  gen: 1
+  plan: "11-18 ≈08:00–09:30"
+  est_s: 5400
+  deadline: "2026-11-19T04:00"
+
+- id: mu_a2p_27b
+  phase: 6
+  kind: muar_arm
+  needs: [lora_g1_27b]
+  wait_for_flags: [evo1_up]
+  skip_if_flags: [evo1_failed]
+  splits: heldout
+  seeds: heldout
+  model: ladder-27b-evo@m1p-27b
+  fake: {needs_up: evo27b}
+  gen: 1
+  plan: "11-18 ≈08:00–09:30"
+  est_s: 5400
+  deadline: "2026-11-19T04:00"
+
+- id: mu_d1_27b              # D_1(27B) for gen 2
+  phase: 6
+  kind: muar_arm
+  needs: [lora_g1_27b]
+  wait_for_flags: [evo1_up]
+  skip_if_flags: [evo1_failed]
+  splits: train
+  seeds: d1
+  model: ladder-27b-evo@m1-27b
+  fake: {needs_up: evo27b}
+  gen: 1
+  plan: "11-18 ≈08:00–09:30"
+  est_s: 5400
+  deadline: "2026-11-19T04:00"
+
+- id: dec_g1_27b
+  phase: 6
+  kind: decision
+  needs: [mu_a2_27b, ladder_mu]
+  after: [mu_a2p_27b, mu_a0b_27b, mu_a1_27b]
+  arm: mu_a2_27b
+  base: ladder_mu
+  placebo: mu_a2p_27b
+  aa: [ladder_mu, mu_a0b_27b]
+  also: [{name: "U_w vs U_s (weights vs retrieval) [27B]", arm: mu_a2_27b, base: mu_a1_27b}]
+  label: "Δ₂(0) U_w M1 [27B]"
+  label_if_flag: [muar_gate2_failed, "(Gate 2 failed)"]
+  pair_with: dec_g1
+  pair_label: "U_w gen 1"
+  set_flags: {uw1_27b_pass: pass, uw1_27b_harmful: harmful}
+  plan: "11-18 ≈09:30"
+
+# optional gen 2 for 27B (same "more M0 data" control as the 9B)
+- id: sft_m2_27b
+  phase: 6
+  kind: sft
+  needs: [mu_g0_27b, mu_d1_27b]
+  sources: [mu_g0_27b, mu_d1_27b]
+  min_examples: 40
+  plan: "11-18 ≈09:30"
+  est_s: 300
+
+- id: sft_m2c_27b
+  phase: 6
+  kind: sft
+  needs: [mu_g0_27b, mu_d0p_27b]
+  sources: [mu_g0_27b, mu_d0p_27b]
+  min_examples: 40
+  plan: "11-18 ≈09:30"
+  est_s: 300
+
+- id: lora_g2_27b
+  phase: 6
+  kind: lora
+  needs: [sft_m2_27b, sft_m2c_27b]
+  after: [serve_evo_g1, dec_g1_27b]
+  skip_if_flags: [uw1_27b_harmful]
+  holds: [gpu-node-d]
+  lane: null
+  remote: {jobid: 10000004, srun_args: ["--gres=gpu:a100:2", "--cpus-per-task=14", "--mem=180G"]}
+  train_cmd: lora_train_27b
+  load: false
+  base_model: Qwen/Qwen3.8-27B
+  gen: 2
+  jobs: [{name: m2-27b, sft: sft_m2_27b}, {name: m2c-27b, sft: sft_m2c_27b}]
+  est_train_s: 9000
+  train_timeout_s: 12600       # 150-min trainer limit + 27B load/save
+  plan: "11-18 ≈09:40–14:40 (node-d)"
+  est_s: 18000
+  latest_start: "2026-11-19T04:00"
+  deadline: "2026-11-19T14:00"
+
+- id: serve_evo_g2
+  phase: 6
+  kind: service
+  needs: [lora_g2_27b]
+  holds: [gpu-node-d]
+  lane: null
+  remote: {jobid: 10000004, srun_args: ["--gres=gpu:a100:2", "--cpus-per-task=14", "--mem=180G"]}
+  cmd: serve_27b_evo
+  served_name: ladder-27b-evo
+  adapters_from: [lora_g2_27b]
+  probe: evo27b
+  url: "{url:ladder-27b-evo}/health"
+  up_flag: evo2_up
+  fail_flags: {evo2_failed: true}
+  until: [mu_a3_27b, mu_a3c_27b]
+  load_s: 900
+  start_timeout_s: 2700
+  max_restarts: 1
+  plan: "11-18 ≈14:40–16:30 (node-d)"
+  est_s: 6600
+  deadline: "2026-11-19T17:30"
+
+- id: mu_a3_27b
+  phase: 6
+  kind: muar_arm
+  needs: [lora_g2_27b]
+  wait_for_flags: [evo2_up]
+  skip_if_flags: [evo2_failed]
+  splits: heldout
+  seeds: heldout
+  model: ladder-27b-evo@m2-27b
+  fake: {needs_up: evo27b}
+  gen: 2
+  plan: "11-18 ≈15:00–16:30"
+  est_s: 5400
+  deadline: "2026-11-19T17:30"
+
+- id: mu_a3c_27b
+  phase: 6
+  kind: muar_arm
+  needs: [lora_g2_27b]
+  wait_for_flags: [evo2_up]
+  skip_if_flags: [evo2_failed]
+  splits: heldout
+  seeds: heldout
+  model: ladder-27b-evo@m2c-27b
+  fake: {needs_up: evo27b}
+  gen: 2
+  plan: "11-18 ≈15:00–16:30"
+  est_s: 5400
+  deadline: "2026-11-19T17:30"
+
+- id: dec_g2_27b
+  phase: 6
+  kind: decision
+  needs: [mu_a3_27b, mu_a2_27b]
+  after: [mu_a3c_27b, mu_a0b_27b]
+  arm: mu_a3_27b
+  base: mu_a2_27b            # Δ₂(1) for 27B
+  placebo: mu_a3c_27b        # more-M0-data control
+  aa: [ladder_mu, mu_a0b_27b]
+  also: [{name: "M2 vs M0 [27B]", arm: mu_a3_27b, base: ladder_mu}]
+  label: "Δ₂(1) U_w M2 [27B] (vs M2' more-M0-data)"
+  label_if_flag: [muar_gate2_failed, "(Gate 2 failed)"]
+  pair_with: dec_g2
+  pair_label: "U_w gen 2"
+  plan: "11-18 ≈16:30"
 
 final_cmds: [pack]           # after the last step (or at gpu_stop): tar runs/ to $R/out for the Mac pull

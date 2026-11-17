@@ -110,7 +110,10 @@ def select_targets(model, short: list[str]) -> list[str]:
     return names
 
 
-def load_model(model_id: str, torch):
+INPUT_DEVICE = "cuda"   # set to the embedding layer's device when the model is split over GPUs (--device-map)
+
+
+def load_model(model_id: str, torch, device_map: str | None = None):
     import transformers
 
     cfg = transformers.AutoConfig.from_pretrained(model_id)
@@ -120,6 +123,8 @@ def load_model(model_id: str, torch):
     last = None
     for cls in [c for c in candidates if c is not None]:
         for dkw in ({"dtype": torch.bfloat16}, {"torch_dtype": torch.bfloat16}):
+            if device_map:  # e.g. "auto": layers split over all visible GPUs (27B on 2 x A100)
+                dkw = {**dkw, "device_map": device_map}
             try:
                 m = cls.from_pretrained(model_id, attn_implementation="sdpa", **dkw)
                 print(f"[lora] loaded {model_id} as {type(m).__name__}", flush=True)
@@ -143,8 +148,8 @@ def _inner_and_head(model):
 
 
 def example_loss(model, batch, torch):
-    ids = torch.tensor([batch["input_ids"]], device="cuda")
-    labels = torch.tensor([batch["labels"]], device="cuda")
+    ids = torch.tensor([batch["input_ids"]], device=INPUT_DEVICE)
+    labels = torch.tensor([batch["labels"]], device=INPUT_DEVICE)
     inner, head = _inner_and_head(model)
     shift_labels = labels[:, 1:]
     mask = shift_labels != -100
@@ -152,9 +157,9 @@ def example_loss(model, batch, torch):
         try:
             out = inner(input_ids=ids, attention_mask=torch.ones_like(ids), use_cache=False)
             h = out[0] if isinstance(out, tuple) else out.last_hidden_state
-            hs = h[:, :-1][mask]
+            hs = h[:, :-1][mask.to(h.device)]
             logits = head(hs).float()
-            return torch.nn.functional.cross_entropy(logits, shift_labels[mask])
+            return torch.nn.functional.cross_entropy(logits, shift_labels[mask].to(logits.device))
         except (TypeError, AttributeError):
             pass
     out = model(input_ids=ids, attention_mask=torch.ones_like(ids), labels=labels, use_cache=False)
@@ -207,6 +212,8 @@ def main(argv=None) -> int:
     ap.add_argument("--time-limit-min", type=float, default=55.0, help="stop, evaluate and save at this limit")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--dry-run", action="store_true", help="tokenise and report only (no GPU)")
+    ap.add_argument("--device-map", default=os.environ.get("RSI_LORA_DEVICE_MAP") or None,
+                    help="e.g. 'auto' to split the base model over all visible GPUs (default: one GPU)")
     a = ap.parse_args(argv)
     t_start = time.time()
 
@@ -231,7 +238,13 @@ def main(argv=None) -> int:
 
     random.seed(a.seed)
     torch.manual_seed(a.seed)
-    model = load_model(a.model, torch).to("cuda")
+    global INPUT_DEVICE
+    model = load_model(a.model, torch, device_map=a.device_map)
+    if a.device_map:
+        INPUT_DEVICE = model.get_input_embeddings().weight.device
+        print(f"[lora] device_map={a.device_map}: {sorted({str(p.device) for p in model.parameters()})}", flush=True)
+    else:
+        model = model.to("cuda")
     model.config.use_cache = False
     short = [s.strip() for s in a.targets.split(",") if s.strip()]
     targets = select_targets(model, short)
