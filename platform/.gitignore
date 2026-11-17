@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+*.egg-info/
+
+# Run outputs and data (live on the cluster, never in git)
+runs/
+data/
+spool/
+*.safetensors
+*.pt
+*.bin
+*.parquet
+*.tgz
+*.tar.gz
+
+# Secrets and tokens
+token
+*.token
+*token*.txt
+*.key
+.env
+run/
+
+# Visualizer (other agent): venv and rendered videos, except small samples
+viz/.venv/
+viz/node_modules/
+viz/out/
+viz/**/*.mp4
+viz/**/*.webm
+viz/**/*.gif
+!viz/samples/**
