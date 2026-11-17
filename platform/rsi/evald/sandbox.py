@@ -163,7 +163,15 @@ class Launcher:
 
 
 class BwrapLauncher(Launcher):
+    """bwrap argv builder. Uses only flags present in bubblewrap 0.4.1 (the cluster's version):
+    --die-with-parent --new-session --unshare-all --hostname --cap-drop --ro-bind --bind
+    --dev-bind --symlink --proc --dev --tmpfs --setenv --chdir. Not used: --clearenv,
+    --chmod, --perms, --size (absent in 0.4.1)."""
+
     name = "bwrap"
+    SUPPORTED_0_4_1 = {"--die-with-parent", "--new-session", "--unshare-all", "--hostname", "--cap-drop",
+                       "--ro-bind", "--bind", "--dev-bind", "--symlink", "--proc", "--dev", "--tmpfs",
+                       "--setenv", "--chdir", "--unsetenv", "--share-net", "--dir", "--file", "--args"}
     SYSTEM_RO = ("/usr", "/etc", "/sys")
     SYSTEM_LINKS = ("/bin", "/sbin", "/lib", "/lib64")
     NVIDIA_COMMON = ("/dev/nvidiactl", "/dev/nvidia-uvm", "/dev/nvidia-uvm-tools", "/dev/nvidia-modeset")
@@ -203,7 +211,8 @@ class BwrapLauncher(Launcher):
                     a += ["--dev-bind", d, d]
             if os.path.isdir("/dev/nvidia-caps"):
                 a += ["--dev-bind", "/dev/nvidia-caps", "/dev/nvidia-caps"]
-        a += ["--clearenv"]
+        # bubblewrap 0.4.1 has no --clearenv: popen() starts bwrap with exactly spec.env
+        # (the `env -i` equivalent); --setenv repeats it so the sandbox env is explicit.
         for k, v in spec.env.items():
             a += ["--setenv", k, str(v)]
         a += ["--chdir", spec.cwd]
@@ -212,8 +221,9 @@ class BwrapLauncher(Launcher):
         return a
 
     def popen(self, spec, stdout, stderr):
+        env = {k: str(v) for k, v in spec.env.items()}   # nothing inherited from evald's env
         return subprocess.Popen(self.build_argv(spec), stdin=subprocess.DEVNULL, stdout=stdout, stderr=stderr,
-                                start_new_session=True, close_fds=True)
+                                env=env, start_new_session=True, close_fds=True)
 
     def host_path(self, spec, inside):
         return _translate_path(inside, spec.mounts) or inside
@@ -271,9 +281,10 @@ def _translate_path(p: str, mounts: list[Mount]) -> str | None:
 def make_launcher(kind: str, **kw) -> Launcher:
     if kind == "bwrap":
         bw = kw.get("bwrap", "bwrap")
-        if shutil.which(bw) is None:
+        bw_path = shutil.which(bw)
+        if bw_path is None:
             raise RuntimeError(f"sandbox=bwrap but {bw!r} is not on PATH (use sandbox=none only for local tests)")
-        return BwrapLauncher(bw, extra_ro=kw.get("extra_ro"), extra_args=kw.get("extra_args"))
+        return BwrapLauncher(bw_path, extra_ro=kw.get("extra_ro"), extra_args=kw.get("extra_args"))
     if kind == "none":
         return NoSandboxLauncher(quiet=kw.get("quiet", False))
     raise ValueError(f"unknown sandbox kind {kind!r}")

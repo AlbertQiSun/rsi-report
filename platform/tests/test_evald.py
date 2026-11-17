@@ -584,3 +584,18 @@ def test_remote_lane_via_srun(tmp_path, data_root, monkeypatch):
         assert res2["status"] == "crash" and "remote lane" in res2["error"]
     finally:
         s.stop()
+
+
+def test_bwrap_argv_only_uses_bubblewrap_0_4_1_flags(tmp_path):
+    from rsi.evald.sandbox import BwrapLauncher, GpuInfo, Mount, SandboxSpec
+
+    spec = SandboxSpec(argv=["/env/bin/python", "-u", "train.py", "--not-a-bwrap-flag"],
+                       env={"A": "1", "PATH": "/usr/bin"}, cwd="/work",
+                       mounts=[Mount(str(tmp_path), "/work", "rw"), Mount(str(tmp_path), "/data/train", "ro"),
+                               Mount(None, "/tmp", "tmpfs")],
+                       gpu=GpuInfo(index=1, uuid="GPU-x", minor=1))
+    argv = BwrapLauncher("bwrap").build_argv(spec)
+    own = argv[1:argv.index("--")]
+    flags = {a for a in own if a.startswith("--")}
+    assert flags <= BwrapLauncher.SUPPORTED_0_4_1, flags - BwrapLauncher.SUPPORTED_0_4_1
+    assert "--clearenv" not in argv and argv[argv.index("--") + 1:] == spec.argv
