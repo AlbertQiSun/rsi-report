@@ -420,6 +420,33 @@ class PolicyKit:
         vals = [v for v in (vals or []) if isinstance(v, (int, float))]
         return statistics.stdev(vals) if len(vals) >= 2 else None
 
+    # ---- run end -------------------------------------------------------------------
+    def curve(self) -> tuple[float | None, list[float | None]]:
+        """(s0, incumbent value after each budget-counting trial) from this run's ledger."""
+        s0, vals = None, []
+        for t, r in sorted(self.ctx.ledger.trials().items()):
+            st = r.get("status")
+            if st == "baseline":
+                s0 = r.get("dev") if s0 is None else s0
+            elif st not in ("pending", "no_change"):
+                v = r.get("incumbent")
+                vals.append(v if isinstance(v, (int, float)) else None)
+        return s0, vals
+
+    def run_end(self, best_value: Any, *, paused: bool) -> float | None:
+        """Emit ``run_end`` (policies own it, as Policy.finish does); nAUC needs ``cfg['s_ref']``."""
+        from rsi.ledger import nauc
+
+        s0, vals = self.curve()
+        na = None
+        s_ref = self.cfg.get("s_ref")
+        if s0 is not None and s_ref is not None and vals:
+            sg = 1.0 if self.task.lower_is_better else -1.0
+            na = nauc(sg * s0, [None if v is None else sg * v for v in vals], sg * float(s_ref))
+        if not paused:
+            self.emit("run_end", ORCH, best_value=best_value, n_trials=self.trials_done(), nAUC=na)
+        return na
+
     # ---- state cache (convenience only; the ledger is the source of truth) ------
     def save_cache(self, **state: Any) -> None:
         with self.lock:
@@ -606,7 +633,7 @@ class NaiveTrialLedger(Policy):
             st["best_value"] = base.get("dev")
         paused = False
         last_feedback = ""
-        idle = 0
+        idle, prev_done = 0, None
 
         while True:
             if ctx.paused():
@@ -614,13 +641,13 @@ class NaiveTrialLedger(Policy):
                 break
             if kit.out_of_budget():
                 break
+            done = kit.trials_done()
+            idle = idle + 1 if prev_done is not None and done == prev_done else 0
+            prev_done = done
             if idle >= int(cfg["max_consecutive_no_change"]):
                 kit.append(kind="stalled", consecutive_no_change=idle)
                 break
-            n_before = kit.trials_done()
             stop, resume, halt_all = self._human_stops(ctx)
-            idle = 0 if getattr(self, "_last_done", None) is None or n_before != self._last_done else idle + 1
-            self._last_done = n_before
             if halt_all:
                 break
             halted = (st["auto_stopped"] - resume) | stop
@@ -726,6 +753,7 @@ class NaiveTrialLedger(Policy):
         summary = {"policy": self.name, "best_value": st["best_value"], "best_hash": st["best_hash"],
                    "n_trials": kit.trials_done(), "counts": st["counts"], "paused": paused,
                    "halted_directions": sorted(st["auto_stopped"] | set(self._human_stops(ctx)[0]))}
+        summary["nAUC"] = kit.run_end(st["best_value"], paused=paused)
         kit.save_cache(**summary)
         return summary
 

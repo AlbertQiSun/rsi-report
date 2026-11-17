@@ -324,6 +324,8 @@ class ApexAI4AI(Policy):
         best = (min(vals) if ctx.task.lower_is_better else max(vals)) if vals else None
         summary = {"policy": self.name, "best_value": best, "n_trials": kit.trials_done(),
                    "paused": state == "paused", "state": state, "results": results}
+        if state == "done":
+            kit.emit("run_end", ORCH, best_value=best, n_trials=kit.trials_done(), nAUC=None)
         kit.save_cache(**{k: v for k, v in summary.items() if k != "results"})
         return summary
 

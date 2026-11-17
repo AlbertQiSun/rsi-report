@@ -31,7 +31,7 @@ import os
 import pickle
 import sys
 import time
-import traceback
+
 
 import torch
 import torch.nn.functional as F
@@ -346,6 +346,23 @@ def score(args) -> dict:
     }
 
 
+def _print_tb(e: BaseException) -> None:
+    """Traceback without source lines: linecache would re-open files the guard now denies."""
+    tb = e.__traceback__
+    out = ["Traceback (no source):"]
+    for fs in _walk_tb(tb):
+        out.append(f"  {fs}")
+    out.append(f"{type(e).__name__}: {str(e)[:500]}")
+    print("\n".join(out), file=sys.stderr, flush=True)
+
+
+def _walk_tb(tb):
+    while tb is not None:
+        co = tb.tb_frame.f_code
+        yield f"{co.co_filename}:{tb.tb_lineno} in {co.co_name}"
+        tb = tb.tb_next
+
+
 class _nullcontext:
     def __enter__(self):
         return None
@@ -382,7 +399,7 @@ def main(argv=None) -> int:
     except _ContractError as e:
         res = {"ok": False, "status": "crash", "error": f"contract: {e}"[:500], "flags": []}
     except Exception as e:  # noqa: BLE001
-        traceback.print_exc()
+        _print_tb(e)
         res = {"ok": False, "status": "crash", "error": f"{type(e).__name__}: {str(e)[:300]}", "flags": []}
     msg = dict(res, k="result")
     sent = rsi_guard.send(msg, blocking=True) if rsi_guard is not None else False

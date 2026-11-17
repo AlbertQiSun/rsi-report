@@ -69,30 +69,30 @@ def _s(tid, split, ttype, data_seed, defect_seed, **params) -> TaskSpec:
 
 SPECS: list[TaskSpec] = [
     # ---- train: 4 types x 2
-    _s("train-modadd-0", "train", "modadd", 11, 101, P=23, train_frac=0.5),
-    _s("train-modadd-1", "train", "modadd", 12, 102, P=29, train_frac=0.4),
+    _s("train-modadd-0", "train", "modadd", 11, 101, P=23, train_frac=0.7),
+    _s("train-modadd-1", "train", "modadd", 12, 102, P=37, train_frac=0.5),
     _s("train-parity-0", "train", "parity", 13, 103, n=20, k=3, n_train=3000, n_val=1000),
     _s("train-parity-1", "train", "parity", 14, 104, n=24, k=3, n_train=4000, n_val=1000),
     _s("train-teacher-0", "train", "teacher_student", 15, 105, d=16, teacher_width=32, teacher_depth=2,
        noise=0.1, n_train=1500, n_val=1000),
     _s("train-teacher-1", "train", "teacher_student", 16, 106, d=24, teacher_width=64, teacher_depth=3,
        noise=0.2, n_train=2000, n_val=1000),
-    _s("train-cls2d-0", "train", "cls2d", 17, 107, kind="spirals", classes=3, jitter=0.03, label_noise=0.05,
+    _s("train-cls2d-0", "train", "cls2d", 17, 111, kind="spirals", classes=3, jitter=0.03, label_noise=0.05,
        n_train=1500, n_val=1000),
-    _s("train-cls2d-1", "train", "cls2d", 18, 108, kind="checker", jitter=0.0, label_noise=0.1,
+    _s("train-cls2d-1", "train", "cls2d", 18, 115, kind="checker", jitter=0.0, label_noise=0.1,
        n_train=1500, n_val=1000),
     # ---- held-out ID: same types, new parameters and defects
-    _s("id-modadd-0", "heldout_id", "modadd", 21, 201, P=31, train_frac=0.45),
-    _s("id-parity-0", "heldout_id", "parity", 22, 202, n=28, k=3, n_train=4000, n_val=1000),
-    _s("id-teacher-0", "heldout_id", "teacher_student", 23, 203, d=20, teacher_width=48, teacher_depth=2,
+    _s("id-modadd-0", "heldout_id", "modadd", 21, 202, P=31, train_frac=0.45),
+    _s("id-parity-0", "heldout_id", "parity", 22, 528, n=28, k=3, n_train=4000, n_val=1000),
+    _s("id-teacher-0", "heldout_id", "teacher_student", 23, 216, d=20, teacher_width=48, teacher_depth=2,
        noise=0.15, n_train=1500, n_val=1000),
-    _s("id-cls2d-0", "heldout_id", "cls2d", 24, 204, kind="spirals", classes=2, jitter=0.05, label_noise=0.1,
+    _s("id-cls2d-0", "heldout_id", "cls2d", 24, 541, kind="spirals", classes=2, jitter=0.05, label_noise=0.1,
        n_train=1500, n_val=1000),
     # ---- held-out OOD: unseen types
-    _s("ood-copyrev-0", "heldout_ood", "copyrev", 31, 301, L=8, V=8, mode="reverse", n_train=3000, n_val=1000),
-    _s("ood-dyck-0", "heldout_ood", "dyck", 32, 302, L=16, K=2, n_train=3000, n_val=1000),
-    _s("ood-icl-0", "heldout_ood", "icl_linreg", 33, 303, d=4, k=12, noise=0.1, n_train=3000, n_val=1000),
-    _s("ood-charlm-0", "heldout_ood", "charlm", 34, 304, context=12, V=40, span=14000, n_train=3000,
+    _s("ood-copyrev-0", "heldout_ood", "copyrev", 31, 303, L=8, V=8, mode="reverse", n_train=3000, n_val=1000),
+    _s("ood-dyck-0", "heldout_ood", "dyck", 32, 337, L=16, K=2, n_train=3000, n_val=1000),
+    _s("ood-icl-0", "heldout_ood", "icl_linreg", 33, 428, d=2, k=8, noise=0.1, n_train=6000, n_val=1000),
+    _s("ood-charlm-0", "heldout_ood", "charlm", 34, 363, context=12, V=40, span=14000, n_train=3000,
        n_val=1000),
 ]
 BY_NAME = {s.name: s for s in SPECS}

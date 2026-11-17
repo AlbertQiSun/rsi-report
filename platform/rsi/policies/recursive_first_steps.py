@@ -127,6 +127,7 @@ class RecursiveFirstSteps(Policy):
         "final_seeds": list(range(100, 110)),
         "start_dir": None,
         "shared_notes_n": 12,
+        "max_idle_rounds": 3,      # rounds in which no thread made an edit (no budget used) -> stop
     }
 
     def __init__(self, cfg: dict | None = None):
@@ -466,6 +467,7 @@ class RecursiveFirstSteps(Policy):
             kit.spawn(tid, "researcher", parent=ORCH)
         paused = False
         rnd = st["max_round"]
+        idle = 0
         with cf.ThreadPoolExecutor(max_workers=len(tids)) as pool:
             while True:
                 if ctx.paused():
@@ -475,12 +477,17 @@ class RecursiveFirstSteps(Policy):
                 if todo:
                     if kit.out_of_budget():
                         break
+                    if idle >= int(cfg["max_idle_rounds"]):
+                        kit.append(kind="stalled", round=rnd, idle_rounds=idle)
+                        break
+                    done_before = kit.trials_done()
                     trials_cap = (ctx.budget or {}).get("trials")
                     slots = len(todo) if trials_cap is None else max(0, int(trials_cap) - kit.trials_done())
                     run_now = todo[:slots]
                     futs = [pool.submit(self._thread_trial, kit, st, ctx, tid, tids.index(tid), rnd) for tid in run_now]
                     for f in futs:
                         f.result()
+                    idle = idle + 1 if kit.trials_done() == done_before else 0
                     if len(run_now) < len(todo):
                         break
                 every = int(cfg["combine"]["every"] or 0)
@@ -506,6 +513,7 @@ class RecursiveFirstSteps(Policy):
                    "n_global_improvements": st["n_impr"], "rules_version": st["rules_version"],
                    "flagged": sorted(st["flagged"]), "paused": paused,
                    "final": None if st["final"] is None else {k: st["final"].get(k) for k in ("value", "sealed", "seeds")}}
+        summary["nAUC"] = kit.run_end(gb["dev"], paused=paused)
         kit.save_cache(**summary)
         return summary
 

@@ -234,7 +234,7 @@ def fake_orchestrator(args: argparse.Namespace) -> int:
         events.emit(run, "eval_submit", "orchestrator", gen=gen, trial=trial, artifact_hash=h, lane=lane,
                     seeds=[int(cfg.get("rng_seed", 0))])
         events.emit(run, "eval_result", "evald", gen=gen, trial=trial, artifact_hash=h, metric="val_bpb",
-                    value=round(value, 6) if status == "ok" else None, seeds=[0], wall_s=round(trial_s * 0.7, 1),
+                    value=round(value, 6) if status == "ok" else None, seeds=[0], wall_s=round(trial_s * 0.4, 1),
                     status=status, audit={"level": "L1", "flags": []})
         better = status == "ok" and (best is None or value < best)
         events.emit(run, "decision", "orchestrator", gen=gen, trial=trial, artifact_hash=h,

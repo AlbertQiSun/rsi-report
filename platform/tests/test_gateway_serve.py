@@ -153,8 +153,13 @@ def test_expose_mode_tp2(env, tmp_path):
         assert url.startswith(f"http://{ip}:")
         d = read_ports(str(pj))
         assert "vllm_ladder-27b" not in d and d["gateway"] == 1111  # stale local key removed, others kept
-        _wait_ok(url, TOKEN)
-        argv = (envdir / "bin" / "argv-ladder-27b.txt").read_text().split("\n")
+        _wait_ok(url, TOKEN)  # the edge answers /v1/models even before vLLM is up
+        af = envdir / "bin" / "argv-ladder-27b.txt"
+        for _ in range(100):
+            if af.exists() and (envdir / "bin" / "env-ladder-27b.txt").exists():
+                break
+            time.sleep(0.1)
+        argv = af.read_text().split("\n")
         assert argv[argv.index("--tensor-parallel-size") + 1] == "2"
         assert argv[argv.index("--host") + 1] == "127.0.0.1"  # vLLM itself never leaves loopback
         assert "CUDA_VISIBLE_DEVICES=0,1" in (envdir / "bin" / "env-ladder-27b.txt").read_text()

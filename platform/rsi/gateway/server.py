@@ -587,10 +587,22 @@ class Handler(BaseHTTPRequestHandler):
                   attempts=attempts, error=err, **common)
 
 
+class _Server(ThreadingHTTPServer):
+    """ThreadingHTTPServer without the reverse-DNS getfqdn() in server_bind (hangs on some cluster IPs)."""
+
+    daemon_threads = True
+    request_queue_size = 256
+
+    def server_bind(self):
+        import socketserver
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address[:2]
+
+
 def make_server(cfg: GatewayConfig, host: str = "127.0.0.1", port: int = 0) -> tuple[ThreadingHTTPServer, Gateway]:
     gw = Gateway(cfg)
     handler = type("GatewayHandler", (Handler,), {"gw": gw})
-    srv = ThreadingHTTPServer((host, port), handler)
+    srv = _Server((host, port), handler)
     srv.daemon_threads = True
     srv.request_queue_size = 256
     return srv, gw

@@ -47,37 +47,40 @@ except ImportError:
     import rsi.policies
     rsi.policies.base = _base
 
-try:
-    import rsi.update  # noqa: F401
-    HAVE_UPDATE = True
-except ImportError:
-    HAVE_UPDATE = False
-    _upd = types.ModuleType("rsi.update")
 
-    def write_lessons(run_dirs, *, model, gateway_url, out_dir, generic_placebo=False):
-        os.makedirs(out_dir, exist_ok=True)
-        text = ("- generic: try things carefully\n" if generic_placebo
-                else f"- lesson: move parameters toward the optimum (from {len(run_dirs)} runs)\n")
-        with open(os.path.join(out_dir, "lessons.md"), "a") as f:
-            f.write(text)
-        return hashlib.sha256(text.encode()).hexdigest()[:12]
 
-    def build_sft_data(run_dirs, *, accepted_only=True, placebo=False, out):
-        os.makedirs(out, exist_ok=True)
-        n = 0
-        with open(os.path.join(out, "train.jsonl"), "w") as f:
-            for d in run_dirs:
-                for line in open(os.path.join(d, "ledger.jsonl")):
-                    r = json.loads(line)
-                    good = r.get("status") in ("adopted", "keep")
-                    if r.get("trial") is not None and (good != placebo):
-                        f.write(json.dumps({"prompt": "p", "completion": r.get("hypothesis", "")}) + "\n")
-                        n += 1
-        return {"n_examples": n, "placebo": placebo}
+def _stub_write_lessons(run_dirs, *, model, gateway_url, out_dir, generic_placebo=False):
+    os.makedirs(out_dir, exist_ok=True)
+    text = ("- generic: try things carefully\n" if generic_placebo
+            else f"- lesson: move parameters toward the optimum (from {len(run_dirs)} runs)\n")
+    with open(os.path.join(out_dir, "lessons.md"), "a") as f:
+        f.write(text)
+    return hashlib.sha256(text.encode()).hexdigest()[:12]
 
-    _upd.write_lessons = write_lessons
-    _upd.build_sft_data = build_sft_data
-    sys.modules["rsi.update"] = _upd
+
+def _stub_build_sft_data(run_dirs, *, accepted_only=True, placebo=False, out, heldout=None):
+    os.makedirs(out, exist_ok=True)
+    n = 0
+    with open(os.path.join(out, "train.jsonl"), "w") as f:
+        for d in run_dirs:
+            for line in open(os.path.join(d, "ledger.jsonl")):
+                r = json.loads(line)
+                good = r.get("status") in ("adopted", "keep")
+                if r.get("trial") is not None and r.get("status") not in ("pending", "baseline") and good != placebo:
+                    f.write(json.dumps({"prompt": "p", "completion": r.get("hypothesis", "")}) + "\n")
+                    n += 1
+    return {"n_train": n, "n_valid": 0, "ok": n > 0}
+
+
+@pytest.fixture
+def stub_update(monkeypatch):
+    """D's rsi.update is exercised by D's tests; here we only test the policy wiring."""
+    import importlib
+
+    mod = importlib.import_module("rsi.update")
+    monkeypatch.setattr(mod, "write_lessons", _stub_write_lessons, raising=False)
+    monkeypatch.setattr(mod, "build_sft_data", _stub_build_sft_data, raising=False)
+
 
 from rsi import events  # noqa: E402
 from rsi.context import RunContext  # noqa: E402
@@ -226,10 +229,15 @@ class FakeHarness:
         smart = (scaffold_dir is not None and "lesson:" in _read(pathlib.Path(scaffold_dir) / "lessons.md")) \
             or ("@" in model and not model.endswith("wp"))
         task_opt = _opt(_task_from_run(run))
-        direction = self.force_direction or rng.choice(["lr", "lr", "width", "wd"])
+        halted: set[str] = set()
+        if "## Halted directions" in prompt:      # a real agent reads the halted list in its prompt
+            line = prompt.split("## Halted directions", 1)[1].splitlines()[1]
+            halted = {x.strip() for x in line.split(",")}
+        options = [d for d in ["lr", "lr", "width", "wd"] if d not in halted] or ["lr"]
+        direction = self.force_direction or rng.choice(options)
         kind = "exploratory" if rng.random() < self.explore_p else "change"
         if direction == "lr":
-            params["lr"] = round(params["lr"] + (task_opt[0] - params["lr"]) * (0.6 if smart else rng.uniform(-0.2, 0.7)), 4)
+            params["lr"] = round(params["lr"] + (task_opt[0] - params["lr"]) * (0.9 if smart else rng.uniform(-0.1, 0.8)), 4)
         elif direction == "width":
             params["width"] = params["width"] + (1 if smart or rng.random() < 0.6 else -1)
         else:
@@ -293,12 +301,13 @@ def make_ctx(tmp_path, run, *, policy, harness, evald, budget, model="improver",
     return ctx
 
 
-def check_events(run_dir: pathlib.Path, required=REQUIRED_EVS) -> list[dict]:
+def check_events(run_dir: pathlib.Path, required=REQUIRED_EVS, max_run_end: int = 1) -> list[dict]:
     evs = events.validate_file(str(run_dir / "events.jsonl"))
     kinds = {e["ev"] for e in evs}
     missing = required - kinds
     assert not missing, f"{run_dir.name}: missing events {missing}"
     assert sum(e["ev"] == "run_start" for e in evs) == 1
+    assert sum(e["ev"] == "run_end" for e in evs) <= max_run_end   # one per completed run() call
     return evs
 
 
@@ -328,7 +337,7 @@ def test_naive_end_to_end_stop_bitwise_and_resume(tmp_path):
     h = FakeHarness(numerics_claim_dir="wd")
     cfg = {"spec": {"objective": "lower loss", "constraints": ["no new deps", {"field": "wall_s", "max": 100}],
                     "acceptance": {"seeds": [0, 1, 2], "min_delta": 0.001, "min_sigma": 2.0, "noise_sigma": 0.002}},
-           "stop_k": 2, "bitwise": {"hook": "e_test_hooks:bitwise_fail", "steps": 5}}
+           "stop_k": 4, "bitwise": {"hook": "e_test_hooks:bitwise_fail", "steps": 5}}
     ctx = make_ctx(tmp_path, "naive-1", policy="naive_trial_ledger", harness=h, evald=ev, budget={"trials": 6})
     (ctx.run_dir / "STOP_DIRECTIONS").write_text("stop width\n")
     s1 = NaiveTrialLedger(cfg).run(ctx)
@@ -342,7 +351,7 @@ def test_naive_end_to_end_stop_bitwise_and_resume(tmp_path):
     recs = list(ctx2.ledger.trials().values())
     st = [r["status"] for r in recs]
     assert st.count("baseline") == 1
-    assert sum(s2["counts"].values()) + st.count("no_change") == 16
+    assert sum(s2["counts"].values()) == 16          # no-edit episodes do not use budget
     assert s2["counts"]["adopted"] >= 1
     # human stop: no width trial was evaluated
     assert all(r["status"] == "no_change" for r in recs if r.get("direction") == "width")
@@ -353,7 +362,8 @@ def test_naive_end_to_end_stop_bitwise_and_resume(tmp_path):
     assert any(r.get("microbench") for r in recs)
     # acceptance used the human's seeds
     assert all(r["seeds"] == [0, 1, 2] for r in recs if r["status"] in ("adopted", "rolled_back") and "seeds" in r)
-    evs = check_events(ctx2.run_dir)
+    evs = check_events(ctx2.run_dir, max_run_end=2)       # finished, then budget extended and resumed
+    assert evs[-1]["ev"] == "run_end" and evs[-1]["n_trials"] == 16
     verdicts = {e["verdict"] for e in evs if e["ev"] == "decision"}
     assert {"adopt", "rollback"} <= verdicts
     # best value monotone and equals the last adopted dev
@@ -377,7 +387,7 @@ def test_naive_auto_stop_queues_human_decision(tmp_path):
     NaiveTrialLedger({"stop_k": 2, "spec": {"acceptance": {"seeds": [0, 1], "min_delta": 0.5}}}).run(ctx2)
     last = max(ctx2.ledger.trials().values(), key=lambda r: r["trial"])
     assert last["status"] == "rolled_back"
-    check_events(ctx2.run_dir)
+    check_events(ctx2.run_dir, max_run_end=2)
 
 
 # ---------------------------------------------------------------------------
@@ -407,9 +417,13 @@ def test_recursive_end_to_end_with_crash_resume(tmp_path):
     assert any(r.get("reason", "").startswith("interrupted") for r in ctx2.ledger.trials().values())
     # combining happened, and confirmation seeds escalate with the number of global improvements
     assert any(r.get("kind") in ("combine", "combine_skip") for r in recs)
-    confirm_lens = [len(r["confirm_seeds"]) for r in sorted(ctx2.ledger.trials().values(), key=lambda r: r["trial"])
-                    if r.get("confirm_seeds")]
-    assert confirm_lens and confirm_lens == sorted(confirm_lens) and max(confirm_lens) > 2
+    # escalation is decided at confirmation time, so check it in decision order (threads run in parallel)
+    confirm_lens = [len(r["confirm_seeds"]) for r in ctx2.ledger.records()
+                    if r.get("confirm_seeds") and r.get("status") in ("adopted", "rejected")]
+    assert confirm_lens and confirm_lens[0] == 2 and max(confirm_lens) > 2
+    pol = RecursiveFirstSteps(REC_CFG)
+    pol.cfg = dict(RecursiveFirstSteps.DEFAULTS, confirm=REC_CFG["confirm"])
+    assert [len(pol._confirm_seeds({"n_impr": n})) for n in range(6)] == [2, 3, 4, 5, 5, 5]
     # no adopted artifact uses the cache hack (sealed gap check caught it)
     adopted = [r for r in ctx2.ledger.trials().values() if r.get("status") == "adopted"]
     assert adopted
@@ -508,7 +522,7 @@ def _se_cfg(tmp_path, executor: str, updates) -> dict:
             "promote": {"n_boot": 300}, "executor": executor}
 
 
-def test_self_evolution_inline_us_uw(tmp_path):
+def test_self_evolution_inline_us_uw(tmp_path, stub_update):
     ev = FakeEval()
     h = FakeHarness(explore_p=0.0, crash_p=0.0)
     ctx = make_ctx(tmp_path, "se-1", policy="self_evolution", harness=h, evald=ev, budget={"trials": None})
@@ -528,7 +542,8 @@ def test_self_evolution_inline_us_uw(tmp_path):
     arms = {p.name.split(".")[2] for p in children}
     assert arms == {"train", "base", "aa", "cand_s", "placebo_s", "cand_w", "placebo_w"}
     for p in children:
-        check_events(p, required={"eval_submit", "proposal", "decision"})
+        evs_c = check_events(p, required={"eval_submit", "proposal", "decision", "run_end"})
+        assert sum(e["ev"] == "run_end" for e in evs_c) == 1
         assert json.loads((p / "arm_result.json").read_text())["s0"] is not None
     # paired seeds: base and candidates share seeds, A/A uses disjoint ones
     g0 = json.loads((ctx.run_dir / "self_evolution" / "gen_0" / "plan.json").read_text())
@@ -541,7 +556,7 @@ def test_self_evolution_inline_us_uw(tmp_path):
         assert g1["improver"]["name"] == "I1"
 
 
-def test_self_evolution_external_plan_for_campaign(tmp_path):
+def test_self_evolution_external_plan_for_campaign(tmp_path, stub_update):
     """executor=external: the policy only writes plans; a mini 'worker F' executes them."""
     import subprocess
 

@@ -70,6 +70,33 @@ def dir_hash(d: str | os.PathLike | None) -> str:
     return h.hexdigest()[:12] if d else "none"
 
 
+def update_fn(name: str):
+    """``rsi.update.<name>`` (INTERFACES.md), falling back to D's submodules if not re-exported."""
+    import importlib
+
+    for mod in ("rsi.update", "rsi.update.lessons", "rsi.update.sft", "rsi.update.us", "rsi.update.uw"):
+        try:
+            fn = getattr(importlib.import_module(mod), name, None)
+        except ImportError:
+            fn = None
+        if fn is not None:
+            return fn
+    raise ImportError(f"rsi.update.{name} is not available (worker D)")
+
+
+def call_filtered(fn, *args, **kw):
+    """Call ``fn`` dropping keyword args it does not accept (optional extras such as ``heldout``)."""
+    import inspect
+
+    try:
+        ps = inspect.signature(fn).parameters
+        if not any(p.kind is p.VAR_KEYWORD for p in ps.values()):
+            kw = {k: v for k, v in kw.items() if k in ps}
+    except (TypeError, ValueError):
+        pass
+    return fn(*args, **kw)
+
+
 # ---------------------------------------------------------------------------
 # One arm = one child run of the inner policy (also the unit worker F executes)
 # ---------------------------------------------------------------------------
@@ -80,7 +107,7 @@ def ledger_curve(records: dict[int, dict]) -> dict:
     for t in sorted(records):
         r = records[t]
         st = r.get("status")
-        if st == "pending":
+        if st in ("pending", "no_change"):      # no-edit episodes do not use budget (Policy.n_started)
             continue
         if st == "baseline":
             s0 = r.get("dev") if s0 is None else s0
@@ -134,7 +161,9 @@ def run_arm(spec: dict, *, evald: Any, harness: Any, task: Any = None) -> dict |
               "seed": spec["seed"], "seed_index": spec.get("seed_index"), "run_dir": str(rd),
               "lower_is_better": bool(task.lower_is_better), "budget_trials": spec["budget"].get("trials"),
               "best_value": summary.get("best_value"), "n_trials": summary.get("n_trials"), **curve}
-    cctx.emit("run_end", ORCH, best_value=summary.get("best_value"), n_trials=summary.get("n_trials"), nAUC=None)
+    if '"ev":"run_end"' not in ev.read_text():          # inner policies normally emit it themselves
+        cctx.emit("run_end", ORCH, best_value=summary.get("best_value"), n_trials=summary.get("n_trials"),
+                  nAUC=summary.get("nAUC"))
     atomic_write_json(str(res_p), result)
     return result
 
@@ -226,7 +255,7 @@ class SelfEvolution(Policy):
         return [self._arm_spec(ctx, k, "train", imp, t, s, i) for t in tasks
                 for i, s in enumerate(self.cfg["train_seeds"])]
 
-    def _candidates(self, ctx, k: int, imp: dict) -> dict[str, dict]:
+    def _candidates(self, ctx, k: int, imp: dict, skipped: set[str] = frozenset()) -> dict[str, dict]:
         """Deterministic improver specs for I_{k+1} (paths known before they are built)."""
         gd = self._gen_dir(ctx, k)
         out = {}
@@ -245,7 +274,7 @@ class SelfEvolution(Policy):
                                 "model": f"{self.cfg['uw']['base_model']}@{name}", "adapter": name,
                                 "adapter_dir": str(gd / f"adapter_{arm}"), "scaffold_dir": imp.get("scaffold_dir"),
                                 "update": "U_w", "placebo": placebo}
-        return out
+        return {a: c for a, c in out.items() if a not in skipped}
 
     def _eval_specs(self, ctx, k: int, imp: dict, cands: dict[str, dict]) -> list[dict]:
         tasks = self.cfg["heldout_tasks"] or [ctx.task.name]
@@ -276,9 +305,13 @@ class SelfEvolution(Policy):
                          "done_file": str(gd / f"lora_{arm}.json"), "after": "sft_build (policy, CPU)"})
         return jobs
 
+    def _skipped(self, ctx, k: int) -> set[str]:
+        return {r["arm"] for r in ctx.ledger.records()
+                if r.get("kind") == "se_update" and r.get("gen") == k and r.get("skipped")}
+
     def plan_generation(self, ctx, k: int, imp: dict) -> dict:
         """The DAG worker F can execute: train arms -> (U_s, SFT build: policy) -> LoRA jobs -> eval arms."""
-        cands = self._candidates(ctx, k, imp)
+        cands = self._candidates(ctx, k, imp, self._skipped(ctx, k))
         plan = {"run": ctx.run, "gen": k, "improver": imp,
                 "stages": [{"name": "train", "items": self._train_specs(ctx, k, imp)},
                            {"name": "update", "items": self._lora_jobs(ctx, k, cands),
@@ -324,8 +357,7 @@ class SelfEvolution(Policy):
         return ready
 
     def _update_s(self, kit, ctx, k, imp, run_dirs, arm, c) -> None:
-        from rsi.update import write_lessons
-
+        write_lessons = update_fn("write_lessons")
         us = self.cfg["us"]
         out = pathlib.Path(c["scaffold_dir"])
         shutil.rmtree(out, ignore_errors=True)
@@ -338,8 +370,9 @@ class SelfEvolution(Policy):
         kit.message(ORCH, writer, f"g{k}: write {'generic placebo memo' if c['placebo'] else 'lessons'} "
                     f"from {len(run_dirs)} runs of D_{k}")
         before = dir_hash(imp.get("scaffold_dir"))
-        h = write_lessons(list(run_dirs), model=model, gateway_url=us.get("gateway_url") or _gateway_url(),
-                          out_dir=str(out), generic_placebo=bool(c["placebo"]))
+        h = call_filtered(write_lessons, list(run_dirs), model=model,
+                          gateway_url=us.get("gateway_url") or _gateway_url(), out_dir=str(out),
+                          generic_placebo=bool(c["placebo"]), **(us.get("kwargs") or {}))
         after = dir_hash(out)
         n_lessons = sum(1 for p in out.rglob("*.md") for line in p.read_text(errors="replace").splitlines()
                         if line.strip().startswith(("-", "*", "1", "2", "3", "4", "5", "6", "7", "8", "9")))
@@ -352,16 +385,21 @@ class SelfEvolution(Policy):
                    n_lessons=n_lessons)
 
     def _update_w(self, kit, ctx, k, imp, run_dirs, arm, c, job) -> bool:
-        from rsi.update import build_sft_data
-
+        build_sft_data = update_fn("build_sft_data")
         uw = self.cfg["uw"]
         res_p = pathlib.Path(job["done_file"])
         sft_info_p = pathlib.Path(job["sft_dir"]) / "_sft_info.json"
         if not sft_info_p.exists():
-            info = build_sft_data(list(run_dirs), accepted_only=True, placebo=bool(c["placebo"]), out=job["sft_dir"])
+            info = call_filtered(build_sft_data, list(run_dirs), accepted_only=True, placebo=bool(c["placebo"]),
+                                 out=job["sft_dir"], heldout=list(self.cfg["heldout_tasks"] or []),
+                                 **(uw.get("sft_kwargs") or {}))
             atomic_write_json(str(sft_info_p), info or {})
         info = json.loads(sft_info_p.read_text())
-        n_ex = int(info.get("n_examples", info.get("n", 0)) or 0)
+        n_ex = int(info.get("n_examples") or (info.get("n_train", 0) + info.get("n_valid", 0)) or 0)
+        if n_ex == 0:
+            kit.append(kind="se_update", gen=k, arm=arm, improver=c, skipped=True,
+                       reason="no SFT examples (G3: too few accepted steps)")
+            return True
         if not res_p.exists():
             if self.cfg["executor"] != "inline":
                 return False                       # worker F runs the LoRA job and writes done_file
@@ -485,7 +523,7 @@ class SelfEvolution(Policy):
                 status = "paused"
                 break
             plan = self.plan_generation(ctx, k, imp)
-            cands = self._candidates(ctx, k, imp)
+            cands = self._candidates(ctx, k, imp, self._skipped(ctx, k))
             agent = f"improver-g{k}"
             kit.spawn(agent, "researcher", model=imp["model"], parent=ORCH)
             # 1. G_k on train tasks -> D_k
@@ -504,6 +542,9 @@ class SelfEvolution(Policy):
             if not self._update(kit, ctx, k, imp, st["train"][k], st["all_dirs"], cands):
                 status = "waiting"
                 break
+            if self._skipped(ctx, k) & set(cands):           # a candidate was dropped: re-plan the eval stage
+                plan = self.plan_generation(ctx, k, imp)
+                cands = self._candidates(ctx, k, imp, self._skipped(ctx, k))
             # 3. held-out arms with paired seeds, placebo, A/A
             for arm in sorted({s["arm"] for s in plan["stages"][2]["items"]}):
                 kit.message(ORCH, agent, f"G{k} held-out arm {arm}")
@@ -539,6 +580,10 @@ class SelfEvolution(Policy):
         summary = {"policy": self.name, "status": status, "generation": st["gen"], "improver": st["improver"],
                    "delta2": seq, "best_value": None, "n_trials": 0, "paused": status == "paused",
                    "plan": str(self._gen_dir(ctx, st["gen"]) / "plan.json") if status == "waiting" else None}
+        if status == "done":
+            kit.emit("run_end", ORCH, best_value=None, n_trials=0, nAUC=None,
+                     delta2=[{a: v["delta2"] for a, v in d.items() if isinstance(v, dict) and "delta2" in v}
+                             for d in seq])
         kit.save_cache(**{k: v for k, v in summary.items() if k != "delta2"})
         return summary
 

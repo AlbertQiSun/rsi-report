@@ -75,8 +75,9 @@ class HttpProbe:
     def check(self, name: str, url: str) -> tuple[bool, str]:
         if "<no-port:" in url:
             return False, "port unknown in ports.json"
+        # Liveness, not correctness: any HTTP answer below 500 (even 401/404) means the process is up.
         code, _ = http("GET", url, self.token_path, timeout=8)
-        return (200 <= code < 300), f"http {code}"
+        return (0 < code < 500), f"http {code}"
 
 
 def gpu_memory() -> list[dict] | None:

@@ -181,7 +181,8 @@ def run(cfg: dict, *, resume: bool = False) -> dict:
                                                "scaffold_hash": scaffold_hash(cfg.get("scaffold_dir"))},
                  budget={"trials": ctx.budget.get("trials"), "wall_s": ctx.budget.get("wall_s")},
                  config_hash=config_hash(cfg), harness=(cfg.get("harness") or {}).get("kind", "opencode"),
-                 lanes=ctx.lanes)
+                 lanes=ctx.lanes, s_ref=ctx.policy_cfg.get("s_ref"),
+                 lower_is_better=ctx.task.lower_is_better, metric=ctx.task.metric)
     else:
         ctx.emit("message", "orchestrator", to="orchestrator", summary="resumed run", tokens=1)
 

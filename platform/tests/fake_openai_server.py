@@ -349,9 +349,21 @@ class _Handler(BaseHTTPRequestHandler):
         self.wfile.flush()
 
 
+class _Server(ThreadingHTTPServer):
+    """ThreadingHTTPServer without the reverse-DNS getfqdn() in server_bind (hangs on some cluster IPs)."""
+
+    daemon_threads = True
+    request_queue_size = 256
+
+    def server_bind(self):
+        import socketserver
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address[:2]
+
+
 def serve(host: str, port: int, state: FakeState) -> ThreadingHTTPServer:
     handler = type("Handler", (_Handler,), {"state": state})
-    srv = ThreadingHTTPServer((host, port), handler)
+    srv = _Server((host, port), handler)
     srv.daemon_threads = True
     return srv
 

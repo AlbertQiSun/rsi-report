@@ -3,7 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 # Modified for RSI-mini (2026-11-17): model split out of vanilla_transformer.py so
 # the evaluator can import it without running training; build_model() added;
-# Blackwell flash-attn-4 branch removed (A100 only); SDPA fallback added.
+# Blackwell flash-attn-4 branch removed; on A100 (sm_80) attention uses torch SDPA
+# because flash-attn-3 requires sm_90.
 """
 Vanilla GPT for the NanoChat task (model half of vanilla_transformer.py).
 
@@ -22,12 +23,15 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 # ---------------------------------------------------------------------------
-# Attention backend: flash-attn-3 via `kernels` on Hopper/Ampere, else SDPA
+# Attention backend. flash-attn-3 needs Hopper (sm_90); on A100 (sm_80) and on
+# CPU we use PyTorch SDPA (F.scaled_dot_product_attention, causal), which picks
+# its own flash / memory-efficient kernel. (Deviation from Recursive's B200 FA4.)
 # ---------------------------------------------------------------------------
 
 flash_attn_func = None
 ATTN_BACKEND = "sdpa"
-if torch.cuda.is_available() and os.environ.get("RSI_ATTN", "fa3") != "sdpa":
+if (torch.cuda.is_available() and torch.cuda.get_device_capability()[0] >= 9
+        and os.environ.get("RSI_ATTN", "fa3") != "sdpa"):
     try:
         from kernels import get_kernel
 
