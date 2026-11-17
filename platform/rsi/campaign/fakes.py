@@ -285,6 +285,9 @@ def fake_gate(args: argparse.Namespace) -> int:
         bad = {"<=": rhs * 2 + 1, ">=": rhs / 2, "<": rhs * 2 + 1, ">": rhs / 2, "==": rhs + 1, "!=": rhs}[op]
         metrics[key] = bad if fail else good
     metrics["fake"] = True
+    if fail and not checks:  # gates judged by exit code (e.g. the evald self-test)
+        print(json.dumps({"fake": True, "all_pass": False}))
+        return 1
     if args.out:
         os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
         with open(args.out, "w") as f:

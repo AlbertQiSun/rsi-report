@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import dataclasses
 import getpass
+import sys
 import glob
 import json
 import os
@@ -15,14 +16,26 @@ SCORER_DIR = os.path.join(PKG_DIR, "scorer")
 NANOCHAT_DIR = os.path.join(os.path.dirname(PKG_DIR), "tasks", "nanochat")
 NANOCHAT_LIB_DIR = os.path.join(NANOCHAT_DIR, "lib")
 NANOCHAT_START_DIR = os.path.join(NANOCHAT_DIR, "start")
+PLATFORM_ROOT = os.path.dirname(os.path.dirname(PKG_DIR))
 
 EVAL_TOKENS = 40 * 524288  # same as Recursive / Karpathy lib.py
+
+
+DEFAULT_REMOTE_SRUN_ARGS = ["--cpus-per-task=6", "--mem=60G", "--gres=gpu:a100:1", "--cpu-bind=none"]
 
 
 @dataclass
 class LaneCfg:
     lane: int
-    gpu: int | None  # nvidia-smi index; None = CPU (tests)
+    gpu: int | str | None   # nvidia-smi index on the evald node; "slurm" = the GPU Slurm gives the step; None = CPU
+    jobid: str | None = None          # set => remote lane: run each seed as a step of this Slurm job
+    node: str | None = None           # optional --nodelist for the step
+    srun_args: list | None = None     # resource args for the step (default DEFAULT_REMOTE_SRUN_ARGS)
+    srun: str = "srun"
+
+    @property
+    def remote(self) -> bool:
+        return self.jobid is not None
 
 
 @dataclass
@@ -54,7 +67,10 @@ class EvaldConfig:
     max_ckpt_bytes: int = 4 << 30
     max_nonparam_frac: float = 0.25
     max_log_bytes: int = 256 << 20
-    gpu_idle_wait_s: float = 120.0
+    gpu_idle_wait_s: float = 600.0
+    host_python: str = sys.executable   # python for evald's own code (remote seed runner); stdlib only
+    platform_root: str = PLATFORM_ROOT  # must be on shared storage for remote lanes
+    remote_slack_s: float = 300.0       # extra outer timeout for a remote step (srun startup etc.)
     keep_scratch: bool = False
     extra_ro_binds: list[str] = field(default_factory=list)  # e.g. a module-provided gcc prefix
     runs_root: str | None = None        # default: $RSI_RUNS_ROOT or ./runs (rsi.events)
@@ -124,12 +140,35 @@ def load_config(path: str) -> EvaldConfig:
 
 
 def parse_lanes(spec: str) -> list[LaneCfg]:
-    """"1,2" -> lane i on GPU i; "1:0,2:1" -> explicit lane:gpu; "1:cpu" -> CPU lane."""
+    """Comma list of lane specs:
+      "1"                      lane 1 on local GPU 1
+      "1:0"                    lane 1 on local GPU 0;  "1:cpu" CPU lane (tests)
+      "3@10000002"             remote lane 3: steps of Slurm job 10000002, GPU chosen by Slurm
+      "3-5@10000002:node-b" lanes 3,4,5 remote, pinned to node node-b
+    """
     out = []
-    for part in [p for p in spec.split(",") if p.strip()]:
+    for part in [p.strip() for p in spec.split(",") if p.strip()]:
+        remote = None
+        if "@" in part:
+            part, remote = part.split("@", 1)
+        gpu_s = None
         if ":" in part:
-            a, b = part.split(":", 1)
-            out.append(LaneCfg(int(a), None if b.strip().lower() in ("cpu", "none", "") else int(b)))
+            part, gpu_s = part.split(":", 1)
+        if "-" in part:
+            a, b = part.split("-", 1)
+            ids = list(range(int(a), int(b) + 1))
         else:
-            out.append(LaneCfg(int(part), int(part)))
+            ids = [int(part)]
+        for lane in ids:
+            if remote is not None:
+                jobid, _, node = remote.partition(":")
+                out.append(LaneCfg(lane, "slurm", jobid=jobid, node=node or None))
+            elif gpu_s is None:
+                out.append(LaneCfg(lane, lane))
+            elif gpu_s.lower() in ("cpu", "none", ""):
+                out.append(LaneCfg(lane, None))
+            elif gpu_s.lower() == "slurm":
+                out.append(LaneCfg(lane, "slurm"))
+            else:
+                out.append(LaneCfg(lane, int(gpu_s)))
     return out

@@ -87,7 +87,9 @@ def do_decision(spec: dict) -> dict:
             arms[label] = json.load(open(path))["arms"][key]
         except (OSError, KeyError, ValueError):
             pass
-    a = {"s_ref": s_ref, "runs": spec["runs"], "arms": arms, "n_trials": spec.get("n_trials"),
+    # s0 comes from each run's baseline trial; for curves loaded from a file, use sref.json's s0
+    s0 = {t: v["s0"] for t, v in raw.items() if isinstance(v, dict) and v.get("s0") is not None}
+    a = {"s_ref": s_ref, "s0": s0, "runs": spec["runs"], "arms": arms, "n_trials": spec.get("n_trials"),
          "n_boot": spec.get("n_boot", 10000), "floor": spec.get("floor", "per_task"), "compare": []}
     have = set(spec["runs"]) | set(arms)
     if not spec["compare"] or not {spec["compare"][0][0], spec["compare"][0][1]} <= have:

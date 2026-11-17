@@ -22,7 +22,7 @@ from rsi.evald import audit
 from rsi.evald.channel import FifoReader
 from rsi.evald.config import GUARD_DIR, NANOCHAT_LIB_DIR, NANOCHAT_START_DIR, EvaldConfig, LaneCfg
 from rsi.evald.honeypot import Honeypots
-from rsi.evald.sandbox import Mount, SandboxSpec, gpu_info, run_limited
+from rsi.evald.sandbox import Mount, SandboxSpec, gpu_info, resolve_slurm_gpu, run_limited
 
 PROBE = r'''
 import json, os, socket, sys
@@ -85,10 +85,13 @@ print("PROBE " + json.dumps(rep))
 '''
 
 
-def run_selftest(cfg: EvaldConfig, gpu: int = 1, prepare: bool = True, smoke: bool = False) -> int:
+def run_selftest(cfg: EvaldConfig, gpu: int | str = 1, prepare: bool = True, smoke: bool = False) -> int:
+    """``gpu``: nvidia-smi index on this node, or "slurm" when running inside a remote lane's step."""
     from rsi.evald.service import EvalService
 
-    report: dict = {"sandbox": cfg.sandbox, "wall_limit_s": cfg.wall_limit_s}
+    import socket
+
+    report: dict = {"sandbox": cfg.sandbox, "wall_limit_s": cfg.wall_limit_s, "node": socket.gethostname()}
     ok = True
     sd = os.path.join(cfg.scratch_dir, "selftest")
     shutil.rmtree(sd, ignore_errors=True)
@@ -101,9 +104,15 @@ def run_selftest(cfg: EvaldConfig, gpu: int = 1, prepare: bool = True, smoke: bo
     with open(os.path.join(work, "artifact", "probe.py"), "w") as f:
         f.write(PROBE)
     svc = EvalService(cfg)
-    g = gpu_info(gpu, cfg.nvidia_smi) if cfg.sandbox == "bwrap" else None
+    g = None
+    if cfg.sandbox == "bwrap":
+        if gpu == "slurm":
+            g, how = resolve_slurm_gpu(cfg.nvidia_smi)
+            report["gpu_resolved"] = {"index": g.index, "uuid": g.uuid, "minor": g.minor, "via": how}
+        else:
+            g = gpu_info(int(gpu), cfg.nvidia_smi)
     fifo = FifoReader(os.path.join(sd, "audit.fifo")).start()
-    mounts = svc._env_mount() + [
+    mounts = svc.runner._env_mount() + [
         Mount(cfg.split_dir("train"), "/data/train", "ro"),
         Mount(cfg.split_dir("tokenizer"), "/data/tokenizer", "ro"),
         Mount(NANOCHAT_LIB_DIR, "/opt/rsi/lib", "ro"),
@@ -124,10 +133,10 @@ def run_selftest(cfg: EvaldConfig, gpu: int = 1, prepare: bool = True, smoke: bo
         decoy = os.path.join(inside0, sorted(os.listdir(host0))[0])
     else:
         decoy = os.path.join(cfg.split_dir("devval"), sorted(os.listdir(cfg.split_dir("devval")))[0])
-    env = svc._env_common(g, "/tmp" if cfg.sandbox == "bwrap" else tmp)
+    env = svc.runner._env_common(g, "/tmp" if cfg.sandbox == "bwrap" else tmp)
     env.update({"HOME": "/work/home", "PYTHONPATH": "/opt/rsi/lib:/opt/rsi/guard",
                 "RSI_AUDIT_PIPE": "/opt/rsi/chan/audit.fifo", "RSI_GUARD_ROLE": "selftest",
-                "RSI_GUARD_DENY": ":".join(svc._deny_list())})
+                "RSI_GUARD_DENY": ":".join(svc.runner._deny_list("train"))})
     listing = ":".join([cfg.split_dir("devval"), cfg.split_dir("sealed"), os.path.expanduser("~/.ssh"),
                         os.path.join(os.path.dirname(cfg.state_dir), "run"), cfg.state_dir])
     scratch_parent = os.path.dirname(os.path.dirname(cfg.data_root))
@@ -189,8 +198,9 @@ def run_selftest(cfg: EvaldConfig, gpu: int = 1, prepare: bool = True, smoke: bo
             ok = False
     if smoke and ok:
         cfg2 = EvaldConfig.from_json(cfg.to_json())
-        cfg2.lanes = [LaneCfg(gpu, gpu)]
+        cfg2.lanes = [LaneCfg(1, gpu if gpu == "slurm" else int(gpu))]
         cfg2.train_env_extra = {"RSI_TIME_BUDGET": "30"}
+        cfg2.state_dir = os.path.join(cfg.state_dir, "selftest")   # keep smoke jobs out of evald's queue
         s2 = EvalService(cfg2).start()
         try:
             jid = s2.submit("selftest-smoke", "nanochat", NANOCHAT_START_DIR, seeds=[0])
@@ -206,3 +216,25 @@ def run_selftest(cfg: EvaldConfig, gpu: int = 1, prepare: bool = True, smoke: bo
     print(json.dumps(report, indent=1, default=str))
     shutil.rmtree(sd, ignore_errors=True)
     return 0 if ok else 1
+
+
+def run_remote_selftest(cfg: EvaldConfig, lane_id: int, prepare: bool, smoke: bool) -> int:
+    """Run the selftest on a remote lane's node through exactly the srun path evald uses."""
+    import subprocess as sp
+
+    from rsi.evald.sandbox import clean_slurm_env, srun_argv
+
+    lane = next(l for l in cfg.lanes if l.lane == lane_id)
+    os.makedirs(cfg.state_dir, exist_ok=True)
+    cp = os.path.join(cfg.state_dir, f"selftest_lane{lane_id}.json")
+    with open(cp, "w") as f:
+        json.dump(cfg.to_json(), f)
+    argv = srun_argv(lane, cfg) + [cfg.host_python, "-m", "rsi.evald", "selftest", "--config", cp, "--gpu", "slurm"]
+    if not prepare:
+        argv.append("--skip-prepare")
+    if smoke:
+        argv.append("--smoke")
+    env = clean_slurm_env()
+    env["PYTHONPATH"] = cfg.platform_root
+    print("[selftest] remote lane", lane_id, "->", " ".join(argv[:8]), "...", flush=True)
+    return sp.call(argv, env=env, cwd=cfg.platform_root)

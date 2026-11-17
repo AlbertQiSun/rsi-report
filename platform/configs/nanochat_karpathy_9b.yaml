@@ -1,5 +1,6 @@
 # First campaign (UV3): NanoChat from the vanilla start, Qwen3.5-9B improver, karpathy_greedy,
-# 2 research threads, each mapped to one eval lane (GPU1, GPU2). Island mode: everything on node-a.
+# 4 research threads sharing 5 eval lanes (lanes 1-2 = node-a GPU1/2, lanes 3-5 = node-b) through
+# evald's FIFO (lane_mode: shared). Orchestrator, OpenCode, gateway and vLLM run on node-a.
 # Start:   python -m rsi.orchestrator --config configs/nanochat_karpathy_9b.yaml
 # Resume:  python -m rsi.orchestrator --config configs/nanochat_karpathy_9b.yaml --resume --set run=<run id>
 run: nanochat-9b-karpathy-{ts}
@@ -10,7 +11,8 @@ task:
   args: {}
 policy:
   name: karpathy_greedy
-  threads: 2
+  threads: 4                    # parallel research threads (each one OpenCode session at a time)
+  lane_mode: shared             # submit with lane=None; evald assigns the next free lane of 1-5
   seeds: [0]                    # single screening seed, as in Karpathy's loop (§4.1); confirmations are a separate policy
   episode_s: 1200               # hard wall-clock per OpenCode episode
   max_consecutive_no_change: 5
@@ -20,10 +22,10 @@ improver:
   model: Qwen/Qwen3.5-9B
 scaffold_dir: null
 budget:
-  trials: 90                    # evaluator calls (main x-axis), both threads together
+  trials: 90                    # evaluator calls (main x-axis), all threads together
   wall_s: 50400                 # 14 h
   episode_s: 1200
-lanes: [1, 2]
+lanes: [1, 2, 3, 4, 5]
 evald:
   url: null                     # null -> ports.json "evald"
   token_file: ${R}/run/token
@@ -35,14 +37,14 @@ harness:
   gateway_ports_key: gateway_agent
   api_key_file: ${R}/run/agent_token
   python: /scratch/user/miniconda3/envs/rsi/bin/python
-  platform_dir: ${R}/code/rsi-mini
+  platform_dir: ${R}/platform
   ddg_cmd: ["${R}/envs/mcp/bin/duckduckgo-mcp-server"]
   fetch_cmd: ["${R}/envs/mcp/bin/mcp-server-fetch"]
   ro_paths:
     - /scratch/user/miniconda3/envs/rsi
     - ${R}/envs/mcp
     - ${R}/envs/rsi-train
-    - ${R}/code/rsi-mini
+    - ${R}/platform
     - ${R}/tools/opencode
   sandbox_path: ${R}/envs/rsi-train/bin:/usr/local/bin:/usr/bin:/bin
   web: true                     # D4: DDG + fetch through the blocklist proxy; set false for the web-off arm

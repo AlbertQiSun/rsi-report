@@ -165,6 +165,7 @@ class RecursiveFirstSteps(Policy):
                 th["best_hash"], th["dev"] = r["global_best"]["hash"], r["global_best"]["dev"]
         if r.get("status") == "adopted":
             st["adopted"].append({"hash": r["artifact_hash"], "parent": r.get("parent_hash"),
+                                  "parents": list(r.get("merged_from") or [r.get("parent_hash")]),
                                   "gain": r.get("gain") or 0.0, "round": rnd})
         if k in ("thread", "combine") and r.get("trial") is not None and r.get("status") != "pending":
             if k == "thread":
@@ -182,6 +183,7 @@ class RecursiveFirstSteps(Policy):
         if k == "l3_round":
             st["l3_rounds"].add(rnd)
         if k == "rollback":
+            st["flagged"] |= set(r.get("tainted") or [])
             st["glob"] = r["global_best"]
             st["glob_hist"].append(r["global_best"])
             st["rules_version"] = r["rules_version"]
@@ -436,16 +438,30 @@ class RecursiveFirstSteps(Policy):
                 ver = st["rules_version"]
         self._rec(kit, st, kind="l3_round", round=rnd, version=st["rules_version"])
 
+    @staticmethod
+    def _tainted(st: dict) -> set[str]:
+        """Flagged artifacts plus every adopted artifact that descends from one (they inherit the hack)."""
+        bad = set(st["flagged"])
+        grew = True
+        while grew:
+            grew = False
+            for a in st["adopted"]:
+                if a["hash"] not in bad and any(p in bad for p in a.get("parents") or []):
+                    bad.add(a["hash"])
+                    grew = True
+        return bad
+
     def _rollback(self, kit: PolicyKit, st: dict, ctx, bad: str, reason: str, rule: str) -> None:
         with open(ctx.run_dir / "audits" / "rules.md", "a") as f:
             f.write(f"- v{st['rules_version'] + 1}: {rule or reason or 'critic-detected hack'} (from {bad})\n")
-        prev = [g for g in st["glob_hist"] if g["hash"] not in st["flagged"]]
+        tainted = self._tainted(st)
+        prev = [g for g in st["glob_hist"] if g["hash"] not in tainted]
         gb = prev[-1] if prev else st["glob_hist"][0]
         reset = {tid: {"hash": gb["hash"], "dev": gb["dev"]} for tid, th in st["threads"].items()
-                 if th["best_hash"] in st["flagged"]}
+                 if th["best_hash"] in tainted}
         before = st["glob"]["dev"]
         self._rec(kit, st, kind="rollback", artifact_hash=bad, global_best=gb, thread_reset=reset,
-                  rules_version=st["rules_version"] + 1, reason=reason)
+                  tainted=sorted(tainted - st["flagged"]), rules_version=st["rules_version"] + 1, reason=reason)
         kit.decision(None, bad, "rollback", before, gb["dev"], f"L3 critic flagged hack: {reason}")
 
     # ------------------------------------------------------------------ main

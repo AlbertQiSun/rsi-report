@@ -9,15 +9,19 @@
 #   NanoChat eval (5-min run + startup + scoring) ≈ 7 min 〔估算〕 → one lane ≈ 8.5 evals/h
 #   9B agent thinking ≈ 2–3 min/trial → one 9B thread ≈ 6 trials/h when it has a lane to itself 〔估算〕
 #   27B agent thinking ≈ 4 min/trial 〔估算〕
-#   4 threads sharing 2 lanes are lane-bound: ≈ 17 evals/h in total, ≈ 4.25 per thread 〔估算〕
+#   27B: 2 threads pinned to ONE lane are lane-bound: ≈ 8.5 evals/h for the run 〔估算〕
 #   est_trial_s = run wall-clock per finished trial, all threads of the run together (used for pacing
 #   checks and dry-run fakes)
 #   LoRA training ≈ 45 min per adapter (30–60) 〔估算〕; µAR step (proposal + CPU eval) ≈ 8 s 〔估算〕
 #
-# Resources: node-a (job 10000001, until 11-19 20:01 Beijing): GPU0 = vLLM 9B, GPU1/GPU2 = eval lanes 1/2,
-# 36 CPUs. Qwen3.8-27B runs on its OWN hold (node-c, job 10000003, TP=2, until ≈11-19 20:45 Beijing);
-# the gateway routes model "ladder-27b" there. It does not borrow a lane on node-a. Its NanoChat evals
-# still use lanes 1/2 on node-a, so 9B and 27B threads share the lanes FIFO.
+# Resources (Beijing time):
+#   node-a (job 10000001, until 11-19 20:01): GPU0 = vLLM 9B, GPU1/GPU2 = eval lanes 1/2, 36 CPUs (µAR)
+#   node-b (job 10000002, 2 days):            eval lanes 3/4/5 (remote lanes in evald, worker B)
+#   node-c (job 10000003, until ≈11-19 20:45): Qwen3.8-27B, TP=2, gateway model "ladder-27b"
+# 5 lanes ≈ 42 evals/h 〔估算〕. Lanes are PINNED per run (policies: thread i -> lanes[i % len(lanes)]):
+#   lane 2 (local GPU2) is the LoRA lane: overnight it only trains adapters, so no G0 thread depends on it;
+#   9B G0 = lanes 1,3,4 (one thread each); 27B ladder = lane 5 (two threads). LoRA must be on a LOCAL GPU
+#   (the campaign process runs on node-a), which is why it is lane 2 and not a lane on node-b.
 #
 # Step kinds (rsi/campaign/scheduler.py):
 #   cmd       one command; `checks` make it a gate; `cache` = reuse a passing result from deployment
@@ -35,7 +39,7 @@
 campaign: ovn1118
 task: overnight
 tz: "+08:00"                       # every clock time below is Beijing time
-planned_start: "2026-11-18T01:00"  # platform deployed 00:00–01:00; the campaign starts with the gates
+planned_start: "2026-11-17T22:45"  # platform deployed ≈22:30; the campaign starts with the gates (P0)
 gpu_stop: "2026-11-19T18:00"       # nothing new on GPUs after this; running work is stopped gracefully
 hold_end: "2026-11-19T20:01"       # job 10000001 ends; 2 h margin for stop + pack
 
@@ -65,7 +69,7 @@ lora_admin:   # gateway admin API (worker C) -> vLLM /v1/load_lora_adapter as "i
 commands:     # templates; {config} {out} {sft_dir} {adapter_out} {gpu} {model} are filled per step
   orchestrator: "{py} -m rsi.orchestrator --config {config}"
   lora_train: "bash {bundle}/lora_train.sh {sft_dir} {adapter_out} {gpu}"
-  noise_floor: "bash {bundle}/noise_floor.sh 20 1,2"          # prints a JSON summary (B)
+  noise_floor: "env MODE=evald bash {bundle}/noise_floor.sh 20 1,2,3,4,5"   # 4 seeds per lane; JSON summary (B)
   toolcall: "{py} {bundle}/toolcall_test.py --model {model} --out {out}"   # (C)
   evald_selftest: "{py} -m rsi.evald.selftest"                 # exit 0 only if every check passes (B)
   muar_baselines: "{py} -m rsi.tasks.muar.runner baseline --method random,local --split heldout --rng-seeds 100,101,102,103,104 --n 12 --workers 8 --out {out}"
@@ -73,9 +77,9 @@ commands:     # templates; {config} {out} {sft_dir} {adapter_out} {gpu} {model} 
   restart_vllm: "bash {bundle}/serve_vllm.sh 9b 0 --lora"
   pack: "tar -czf {R}/out/{campaign}-runs.tgz -C {R} runs"
 
-lanes: [1, 2]
-lane_gpus: {1: 1, 2: 2}
-lora_lane: 2                 # LoRA always borrows lane 2 / GPU2; lane 1 keeps evaluating
+lanes: [1, 2, 3, 4, 5]
+lane_gpus: {1: 1, 2: 2}      # local lanes only; lanes 3-5 live on node-b
+lora_lane: 2                 # LoRA always borrows lane 2 / local GPU2
 tick_s: 10
 status_interval_s: 3600      # hourly line in runs/campaign_status.md (plus a line at every gate/decision/alert)
 stop_grace_s: 900            # a run gets 15 min to reach a trial boundary after PAUSE, then SIGTERM
@@ -83,7 +87,7 @@ max_restarts: 3              # per run, with --resume, backoff 2/4/6 min
 restart_backoff_s: 120
 analysis: {n_boot: 10000, floor: per_task}   # rsi.update.analysis (D): floor = 2 × sd of per-task A/A diffs
 dry_run:                     # --dry-run only: fake components, compressed clock, smaller µAR fan-out
-  time_scale: 2000           # 1 real s = 2000 virtual s: the whole 41-h plan replays in ≈75 s
+  time_scale: 2000           # 1 real s = 2000 virtual s: the whole plan replays in ≈1 min
   muar_tasks_per_split: 2    # (fake sub-runs cost ≈0.25 real s each; the full fan-out would outrun the clock)
   muar_seeds: 2
   n_boot: 300
@@ -138,21 +142,21 @@ run_defaults:
   policy: karpathy_greedy
   model: improver
   scaffold_dir: null
-  lanes: [1, 2]
+  lanes: [1]
   budget: {episode_s: 600}
   seeds: [0]                 # screening dev seed (Karpathy's fixed seed)
-  policy_cfg: {lane_mode: shared}   # submit with lane=None: evald gives the next free lane (FIFO)
+  policy_cfg: {}             # lanes pinned: thread i -> lanes[i % len(lanes)]
 
 steps:
-# ───────────────────────── Phase 0: gates (planned 01:00–02:10, must finish by 02:40) ─────────────────────────
+# ═══════════════════ Phase 0: gates (planned 11-17 22:45–23:25; must finish by 11-18 00:15) ═══════════════════
 - id: g1a_noise
   phase: 0
   kind: cmd
   cmd: noise_floor
-  plan: "11-18 01:00–02:10"
-  est_s: 4200                # 20 vanilla seeds, 10 per lane × 7 min 〔估算〕
+  plan: "11-17 22:45–23:15"
+  est_s: 1800                # 20 vanilla seeds over 5 lanes = 4 per lane × 7 min 〔估算〕
   cache: "{gates}/g1a_noise.json"
-  deadline: "2026-11-18T02:40"
+  deadline: "2026-11-18T00:15"
   checks: {dev_bpb.sd: "<= 0.02", job_wall_s.max: "<= 600", status_counts.ok: ">= 18"}
   on_fail:
     wait_human_s: 1200
@@ -169,10 +173,10 @@ steps:
   kind: cmd
   cmd: toolcall
   model: improver
-  plan: "11-18 01:00–01:20"
+  plan: "11-17 22:45–23:05"
   est_s: 1200
   cache: "{gates}/g1b_toolcall.json"
-  deadline: "2026-11-18T02:40"
+  deadline: "2026-11-18T00:15"
   checks: {call_validity_rate: ">= 0.90", episode_completion_rate: ">= 0.70"}
   on_fail:
     wait_human_s: 1800       # time to try another parser / tool_choice=required
@@ -185,24 +189,24 @@ steps:
   kind: cmd
   cmd: toolcall
   model: ladder-27b
-  plan: "11-18 01:00–01:20"
+  plan: "11-17 22:45–23:05"
   est_s: 1200
   cache: "{gates}/g1b_27b.json"
-  deadline: "2026-11-18T02:40"
+  deadline: "2026-11-18T00:15"
   checks: {call_validity_rate: ">= 0.90", episode_completion_rate: ">= 0.70"}
   on_fail:
     wait_human_s: 1200
     fallbacks:
       - set_flags: {ladder27b_remote: false}
-        note: "remote 27B unusable: ladder moves to GPU2 after the first CFF block (ladder_fb_*)"
+        note: "remote 27B unusable: ladder moves to GPU2 (lane 2) after the last LoRA (ladder_fb_*)"
 
 - id: g1c_evald
   phase: 0
   kind: cmd
   cmd: evald_selftest
-  plan: "11-18 01:00–01:05"
-  est_s: 300
-  deadline: "2026-11-18T02:40"
+  plan: "11-17 22:45–22:55"
+  est_s: 600
+  deadline: "2026-11-18T00:15"
   checks: {}                 # the self-test's exit code is the gate
   on_fail:
     wait_human_s: 3600       # plan §6.8: do not start NanoChat on an evaluator that fails its self-tests
@@ -217,9 +221,9 @@ steps:
   task_index: [0, 1]
   seeds: smoke
   N: 20
-  plan: "11-18 01:00–01:15"
+  plan: "11-17 22:45–23:00"
   est_s: 900
-  deadline: "2026-11-18T02:40"
+  deadline: "2026-11-18T00:15"
   checks: {ok_rate: ">= 0.70", mean_wall_s: "< 5"}       # design Gate 1
   on_fail:
     wait_human_s: 1800
@@ -227,44 +231,46 @@ steps:
       - set_flags: {muar: false}
         note: "µAR off: no second-order arms tonight"
 
-# ───────────────────── Phase 1: first-order G0 (starts when all gates resolved, planned 02:10) ─────────────────────
-- id: nc_g0
+# ═══════════ Phase 1: first-order G0 + capability ladder (starts when all gates resolved, ≈23:30) ═══════════
+- id: nc_g0                  # 9B, vanilla start, 3 threads pinned to lanes 1, 3, 4
   phase: 1
   kind: run
   after: [g1a_noise, g1b_toolcall, g1b_27b, g1c_evald, g2_muar_smoke]
   requires_flags: [nanochat, nanochat_9b]
-  plan: "11-18 02:10–≈11:45"
+  plan: "11-17 23:30 – 11-18 04:15"
   run:
     policy: karpathy_greedy
     model: improver
-    policy_cfg: {threads: 2, trials_per_thread: 30}
-    budget: {trials: 60}
+    lanes: [1, 3, 4]
+    policy_cfg: {threads: 3, trials_per_thread: 30}
+    budget: {trials: 90}
     rng_seed: 1000
-  overlays: [{when: nanochat_noisy, set: {policy_cfg: {confirm_seeds: [1]}, budget: {trials: 48}}}]
-  stop_when_trials: 60       # trial-count trigger: P1 → P2 for NanoChat (2 threads × 30)
-  est_trial_s: 570           # 〔估算〕 (fake/dry-run pacing only)
-  est_s: 34200               # ≈ 9.5 h with lane 2 lent to LoRA for ≈5 h 〔估算〕
-  deadline: "2026-11-18T13:00"
+  overlays: [{when: nanochat_noisy, set: {policy_cfg: {confirm_seeds: [1]}, budget: {trials: 72}}}]
+  stop_when_trials: 90       # trial-count trigger: G0 ends at 3 × 30 trials → NanoChat P2/P3 begin
+  est_trial_s: 190           # run wall-clock per trial: 3 threads × ≈6.3 trials/h 〔估算〕
+  est_s: 17100
+  deadline: "2026-11-18T07:30"
   stall_s: 2400
   abort_if: {min_trials: 12, ok_rate_lt: 0.2}
 
-- id: ladder_nc              # capability ladder: same protocol, 27B, in parallel with nc_g0
+- id: ladder_nc              # capability ladder: same protocol with 27B, in parallel, 2 threads on lane 5
   phase: 1
   kind: run
   after: [g1a_noise, g1b_toolcall, g1b_27b, g1c_evald, g2_muar_smoke]
   requires_flags: [nanochat, ladder27b_remote]
-  plan: "11-18 02:10–≈11:45"
+  plan: "11-17 23:30 – 11-18 06:30"
   run:
     policy: karpathy_greedy
     model: ladder-27b
+    lanes: [5]
     policy_cfg: {threads: 2, trials_per_thread: 30}
     budget: {trials: 60}
     rng_seed: 1100
   overlays: [{when: nanochat_noisy, set: {policy_cfg: {confirm_seeds: [1]}, budget: {trials: 48}}}]
   stop_when_trials: 60
-  est_trial_s: 570           # lane-bound: same pace as nc_g0 〔估算〕
-  est_s: 34200
-  deadline: "2026-11-18T13:00"
+  est_trial_s: 420           # lane-bound: one lane ≈ 8.5 evals/h 〔估算〕
+  est_s: 25200
+  deadline: "2026-11-18T09:00"
   stall_s: 2400
   abort_if: {min_trials: 12, ok_rate_lt: 0.2}
 
@@ -277,9 +283,9 @@ steps:
   seeds: g0
   model: improver
   gen: 0
-  plan: "11-18 02:10–02:40"
-  est_s: 1800
-  deadline: "2026-11-18T05:00"
+  plan: "11-17 23:30 – 11-18 00:10"
+  est_s: 2400
+  deadline: "2026-11-18T02:30"
 
 - id: mu_a0a                 # held-out baseline M0 σ0
   phase: 1
@@ -290,9 +296,9 @@ steps:
   seeds: heldout
   model: improver
   gen: 0
-  plan: "11-18 02:10–02:45"
-  est_s: 1800
-  deadline: "2026-11-18T06:00"
+  plan: "11-17 23:30 – 11-18 00:15"
+  est_s: 2400
+  deadline: "2026-11-18T03:30"
 
 - id: mu_a0b                 # A/A: same improver, disjoint seeds
   phase: 1
@@ -303,9 +309,9 @@ steps:
   seeds: aa
   model: improver
   gen: 0
-  plan: "11-18 02:10–02:50"
-  est_s: 1800
-  deadline: "2026-11-18T06:00"
+  plan: "11-17 23:30 – 11-18 00:20"
+  est_s: 2400
+  deadline: "2026-11-18T03:30"
 
 - id: mu_baselines           # non-LLM baselines R (random) and R-local on held-out, D's runner CLI
   phase: 1
@@ -313,9 +319,9 @@ steps:
   cmd: muar_baselines
   after: [g2_muar_smoke]
   requires_flags: [muar]
-  plan: "11-18 02:15–02:20"
+  plan: "11-17 23:30–23:40"
   est_s: 600
-  deadline: "2026-11-18T06:00"
+  deadline: "2026-11-18T03:30"
   checks: {}
   on_fail: {fallbacks: [{status: done, note: "no baselines: Gate 2 recorded as no data"}]}
 
@@ -327,9 +333,9 @@ steps:
   splits: heldout
   seeds: heldout
   model: ladder-27b
-  plan: "11-18 02:15–03:15"
+  plan: "11-17 23:30 – 11-18 00:30"
   est_s: 3600
-  deadline: "2026-11-18T08:00"
+  deadline: "2026-11-18T05:00"
 
 - id: mu_d0p                 # D_0' (more M0 data, for the gen-2 control)
   phase: 1
@@ -340,9 +346,9 @@ steps:
   seeds: d1
   model: improver
   gen: 0
-  plan: "11-18 02:40–03:20"
-  est_s: 1800
-  deadline: "2026-11-18T08:00"
+  plan: "11-18 00:10–00:50"
+  est_s: 2400
+  deadline: "2026-11-18T05:00"
 
 - id: g2b_beats_rlocal       # design Gate 2: M0 must beat local perturbation on held-out
   phase: 1
@@ -353,7 +359,7 @@ steps:
   base: "mu_baselines:R-local"
   label: "Gate2 M0 vs R-local"
   require: "> 0"
-  plan: "11-18 ≈02:50"
+  plan: "11-18 ≈00:20"
   on_fail:
     wait_human_s: 1200
     fallbacks:
@@ -361,7 +367,7 @@ steps:
         status: done
         note: "continue, but every µAR Δ₂ is labelled 'Gate 2 failed' (task may be too hard for M0)"
 
-# ───────────────────────── Phase 2: U_s (lessons) ─────────────────────────
+# ═══════════════════════ Phase 2: U_s (lessons) on µAR ═══════════════════════
 - id: us_lessons_mu
   phase: 2
   kind: lessons
@@ -369,7 +375,7 @@ steps:
   sources: [mu_g0]
   model: improver
   gen: 1
-  plan: "11-18 02:40–02:50"
+  plan: "11-18 00:10–00:20"
   est_s: 600
 
 - id: us_placebo_mu          # placebo: same length, written without reading trajectories
@@ -382,7 +388,7 @@ steps:
   out_dir: "{campaign_dir}/scaffolds/us_placebo_mu-placebo"
   model: improver
   gen: 1
-  plan: "11-18 02:40–02:50"
+  plan: "11-18 00:20–00:30"
   est_s: 600
 
 - id: mu_a1                  # A1 = M0 + σ1 (also the retrieval control for U_w)
@@ -394,9 +400,9 @@ steps:
   model: improver
   scaffold: "lessons:us_lessons_mu"
   gen: 1
-  plan: "11-18 02:50–03:30"
-  est_s: 1800
-  deadline: "2026-11-18T08:00"
+  plan: "11-18 00:20–01:00"
+  est_s: 2400
+  deadline: "2026-11-18T04:00"
 
 - id: mu_a1p
   phase: 2
@@ -407,9 +413,9 @@ steps:
   model: improver
   scaffold: "lessons:us_placebo_mu"
   gen: 1
-  plan: "11-18 02:50–03:30"
-  est_s: 1800
-  deadline: "2026-11-18T08:00"
+  plan: "11-18 00:30–01:10"
+  est_s: 2400
+  deadline: "2026-11-18T04:00"
 
 - id: dec_us
   phase: 2
@@ -423,17 +429,17 @@ steps:
   label: "Δ₂(0) U_s lessons"
   label_if_flag: [muar_gate2_failed, "(Gate 2 failed)"]
   set_flags: {us1_pass: pass}
-  plan: "11-18 ≈03:30"
+  plan: "11-18 ≈01:10"
 
-# ───────────────────────── Phase 3: U_w LoRA, three generations on µAR ─────────────────────────
+# ═══════════════ Phase 3: U_w LoRA, three generations on µAR (lane 2 = LoRA lane) ═══════════════
 - id: sft_m1
   phase: 3
   kind: sft
   needs: [mu_g0]
   sources: [mu_g0]
   accepted_only: true
-  min_examples: 40           # gate G3
-  plan: "11-18 02:40–02:45"
+  min_examples: 40           # gate G3 (accepted steps)
+  plan: "11-18 00:10–00:15"
   est_s: 300
   on_fail: {fallbacks: [{note: "fewer than 40 accepted steps: U_w gen 1 skipped (D_0 too small)"}]}
 
@@ -444,7 +450,7 @@ steps:
   sources: [mu_g0]
   placebo: true              # same count of valid-but-rejected steps
   min_examples: 40
-  plan: "11-18 02:40–02:45"
+  plan: "11-18 00:10–00:15"
   est_s: 300
   on_fail: {fallbacks: [{note: "placebo SFT set too small"}]}
 
@@ -458,9 +464,9 @@ steps:
   jobs: [{name: m1, sft: sft_m1}, {name: m1p, sft: sft_m1p}]
   est_train_s: 2700          # 〔估算〕 per adapter
   train_timeout_s: 5400
-  plan: "11-18 02:50–04:30 (lane 2 paused)"
+  plan: "11-18 00:15–01:55 (lane 2)"
   est_s: 6000
-  deadline: "2026-11-18T07:00"
+  deadline: "2026-11-18T04:30"
 
 - id: mu_a2                  # A2 = M1 (weights)
   phase: 3
@@ -470,9 +476,9 @@ steps:
   seeds: heldout
   model: improver@m1
   gen: 1
-  plan: "11-18 04:30–05:00"
-  est_s: 1800
-  deadline: "2026-11-18T09:00"
+  plan: "11-18 01:55–02:25"
+  est_s: 2400
+  deadline: "2026-11-18T06:00"
 
 - id: mu_a2p
   phase: 3
@@ -482,9 +488,9 @@ steps:
   seeds: heldout
   model: improver@m1p
   gen: 1
-  plan: "11-18 04:30–05:00"
-  est_s: 1800
-  deadline: "2026-11-18T09:00"
+  plan: "11-18 01:55–02:25"
+  est_s: 2400
+  deadline: "2026-11-18T06:00"
 
 - id: mu_d1                  # D_1: M1 on train, new seeds
   phase: 3
@@ -494,15 +500,15 @@ steps:
   seeds: d1
   model: improver@m1
   gen: 1
-  plan: "11-18 04:30–05:00"
-  est_s: 1800
-  deadline: "2026-11-18T09:00"
+  plan: "11-18 01:55–02:25"
+  est_s: 2400
+  deadline: "2026-11-18T06:00"
 
 - id: dec_g1
   phase: 3
   kind: decision
   needs: [mu_a2, mu_a0a]
-  after: [mu_a2p, mu_a0b, mu_a1]
+  after: [mu_a2p, mu_a0b, mu_a1, ladder_mu]
   arm: mu_a2
   base: mu_a0a
   placebo: mu_a2p
@@ -512,7 +518,7 @@ steps:
   label: "Δ₂(0) U_w M1"
   label_if_flag: [muar_gate2_failed, "(Gate 2 failed)"]
   set_flags: {uw1_pass: pass, uw1_harmful: harmful}
-  plan: "11-18 ≈05:00"
+  plan: "11-18 ≈02:25"
 
 - id: sft_m2                 # I_2 = U(I_0; D_0 ∪ D_1)
   phase: 3
@@ -520,7 +526,7 @@ steps:
   needs: [mu_g0, mu_d1]
   sources: [mu_g0, mu_d1]
   min_examples: 40
-  plan: "11-18 ≈05:00"
+  plan: "11-18 ≈02:25"
   est_s: 300
 
 - id: sft_m2c                # control 8: I_2' = U(I_0; D_0 ∪ D_0')
@@ -529,7 +535,7 @@ steps:
   needs: [mu_g0, mu_d0p]
   sources: [mu_g0, mu_d0p]
   min_examples: 40
-  plan: "11-18 ≈05:00"
+  plan: "11-18 ≈02:25"
   est_s: 300
 
 - id: lora_g2
@@ -544,10 +550,10 @@ steps:
   jobs: [{name: m2, sft: sft_m2}, {name: m2c, sft: sft_m2c}]
   est_train_s: 2700
   train_timeout_s: 5400
-  plan: "11-18 05:05–06:45 (lane 2 paused)"
+  plan: "11-18 02:30–04:10 (lane 2)"
   est_s: 6000
-  latest_start: "2026-11-18T09:00"
-  deadline: "2026-11-18T11:00"
+  latest_start: "2026-11-18T06:00"
+  deadline: "2026-11-18T08:00"
 
 - id: mu_a3
   phase: 3
@@ -557,9 +563,9 @@ steps:
   seeds: heldout
   model: improver@m2
   gen: 2
-  plan: "11-18 06:45–07:15"
-  est_s: 1800
-  deadline: "2026-11-18T12:00"
+  plan: "11-18 04:10–04:40"
+  est_s: 2400
+  deadline: "2026-11-18T09:00"
 
 - id: mu_a3c
   phase: 3
@@ -569,9 +575,9 @@ steps:
   seeds: heldout
   model: improver@m2c
   gen: 2
-  plan: "11-18 06:45–07:15"
-  est_s: 1800
-  deadline: "2026-11-18T12:00"
+  plan: "11-18 04:10–04:40"
+  est_s: 2400
+  deadline: "2026-11-18T09:00"
 
 - id: mu_d2
   phase: 3
@@ -581,9 +587,9 @@ steps:
   seeds: d2
   model: improver@m2
   gen: 2
-  plan: "11-18 06:45–07:15"
-  est_s: 1800
-  deadline: "2026-11-18T12:00"
+  plan: "11-18 04:10–04:40"
+  est_s: 2400
+  deadline: "2026-11-18T09:00"
 
 - id: mu_d0pp                # D_0'' (more M0 data, gen-3 control)
   phase: 3
@@ -594,9 +600,9 @@ steps:
   seeds: d2
   model: improver
   gen: 0
-  plan: "11-18 03:20–04:00"
-  est_s: 1800
-  deadline: "2026-11-18T12:00"
+  plan: "11-18 00:50–01:30"
+  est_s: 2400
+  deadline: "2026-11-18T09:00"
 
 - id: dec_g2
   phase: 3
@@ -611,7 +617,7 @@ steps:
   label: "Δ₂(1) U_w M2 (vs M2' more-M0-data)"
   label_if_flag: [muar_gate2_failed, "(Gate 2 failed)"]
   set_flags: {uw2_pass: pass, uw2_harmful: harmful}
-  plan: "11-18 ≈07:15"
+  plan: "11-18 ≈04:40"
 
 - id: sft_m3
   phase: 3
@@ -619,7 +625,7 @@ steps:
   needs: [mu_g0, mu_d1, mu_d2]
   sources: [mu_g0, mu_d1, mu_d2]
   min_examples: 40
-  plan: "11-18 ≈07:15"
+  plan: "11-18 ≈04:40"
   est_s: 300
 
 - id: sft_m3c
@@ -628,7 +634,7 @@ steps:
   needs: [mu_g0, mu_d0p, mu_d0pp]
   sources: [mu_g0, mu_d0p, mu_d0pp]
   min_examples: 40
-  plan: "11-18 ≈07:15"
+  plan: "11-18 ≈04:40"
   est_s: 300
 
 - id: lora_g3
@@ -643,10 +649,10 @@ steps:
   jobs: [{name: m3, sft: sft_m3}, {name: m3c, sft: sft_m3c}]
   est_train_s: 2700
   train_timeout_s: 5400
-  plan: "11-18 07:20–09:00 (lane 2 paused)"
+  plan: "11-18 04:45–06:25 (lane 2)"
   est_s: 6000
-  latest_start: "2026-11-18T12:00"     # if late, it would eat the CFF blocks: skip gen 3 instead
-  deadline: "2026-11-18T14:00"
+  latest_start: "2026-11-18T08:00"
+  deadline: "2026-11-18T10:00"
 
 - id: mu_a4
   phase: 3
@@ -656,9 +662,9 @@ steps:
   seeds: heldout
   model: improver@m3
   gen: 3
-  plan: "11-18 09:00–09:30"
-  est_s: 1800
-  deadline: "2026-11-18T16:00"
+  plan: "11-18 06:25–06:55"
+  est_s: 2400
+  deadline: "2026-11-18T12:00"
 
 - id: mu_a4c
   phase: 3
@@ -668,9 +674,9 @@ steps:
   seeds: heldout
   model: improver@m3c
   gen: 3
-  plan: "11-18 09:00–09:30"
-  est_s: 1800
-  deadline: "2026-11-18T16:00"
+  plan: "11-18 06:25–06:55"
+  est_s: 2400
+  deadline: "2026-11-18T12:00"
 
 - id: dec_g3
   phase: 3
@@ -685,11 +691,11 @@ steps:
   label: "Δ₂(2) U_w M3 (vs M3')"
   label_if_flag: [muar_gate2_failed, "(Gate 2 failed)"]
   set_flags: {uw3_pass: pass}
-  plan: "11-18 ≈09:30"
+  plan: "11-18 ≈07:00"
 
-# ─────────────── Phases 2–3 on NanoChat: continue-from-frontier (CFF), rep 1 ───────────────
-# All arms start from a* = the best artifact of nc_g0 and get the same nc_g0 history; only the
-# improver differs. 12 trials each; two arms run at a time (one thread each, sharing both lanes).
+# ═══════ NanoChat continue-from-frontier (CFF): 4 arms × 3 reps × 12 trials, one lane per run ═══════
+# Every arm starts from a* = the best artifact of nc_g0 with the same nc_g0 history; only the improver
+# differs. Each run is pinned to one lane; arms rotate over lanes between reps (lane counterbalancing).
 - id: us_lessons_nc
   phase: 2
   kind: lessons
@@ -697,66 +703,174 @@ steps:
   sources: [nc_g0]
   model: improver
   gen: 1
-  plan: "11-18 ≈11:45"
+  plan: "11-18 04:15–04:25"
   est_s: 600
 
+# block 1 (lanes 1, 3, 4; ≈04:25–06:25)
 - id: cf_m0_r1
   phase: 2
   kind: run
   needs: [nc_g0]
-  after: [ladder_nc]
-  plan: "11-18 11:55–13:55"
-  run: {model: improver, start_from: "frontier:nc_g0", history_from: "runs:nc_g0", policy_cfg: {threads: 1},
-        budget: {trials: 12}, rng_seed: 2001}
+  plan: "11-18 04:25–06:25 lane 1"
+  run: {model: improver, lanes: [1], start_from: "frontier:nc_g0", history_from: "runs:nc_g0",
+        policy_cfg: {threads: 1}, budget: {trials: 12}, rng_seed: 2001}
   stop_when_trials: 12
   est_trial_s: 570
-  est_s: 7200
-  deadline: "2026-11-18T16:30"
+  est_s: 6840
+  deadline: "2026-11-18T09:30"
 
 - id: cf_s1_r1
   phase: 2
   kind: run
   needs: [nc_g0, us_lessons_nc]
-  after: [ladder_nc]
-  plan: "11-18 11:55–13:55"
-  run: {model: improver, scaffold_dir: "lessons:us_lessons_nc", start_from: "frontier:nc_g0",
+  plan: "11-18 04:25–06:25 lane 3"
+  run: {model: improver, scaffold_dir: "lessons:us_lessons_nc", lanes: [3], start_from: "frontier:nc_g0",
         history_from: "runs:nc_g0", policy_cfg: {threads: 1}, budget: {trials: 12}, rng_seed: 2002}
   stop_when_trials: 12
   est_trial_s: 570
-  est_s: 7200
-  deadline: "2026-11-18T16:30"
+  est_s: 6840
+  deadline: "2026-11-18T09:30"
 
 - id: cf_m1_r1               # M1 was trained on µAR only: this is also a µAR→NanoChat transfer test
   phase: 3
   kind: run
   needs: [nc_g0, lora_g1]
-  after: [cf_m0_r1, cf_s1_r1]
-  plan: "11-18 13:55–15:55"
-  run: {model: improver@m1, start_from: "frontier:nc_g0", history_from: "runs:nc_g0", policy_cfg: {threads: 1},
-        budget: {trials: 12}, rng_seed: 2003}
+  plan: "11-18 04:25–06:25 lane 4"
+  run: {model: improver@m1, lanes: [4], start_from: "frontier:nc_g0", history_from: "runs:nc_g0",
+        policy_cfg: {threads: 1}, budget: {trials: 12}, rng_seed: 2003}
   stop_when_trials: 12
   est_trial_s: 570
-  est_s: 7200
-  deadline: "2026-11-18T18:30"
+  est_s: 6840
+  deadline: "2026-11-18T09:30"
 
+# block 2 (lanes 1, 3, 4, 5, 2; ≈06:30–08:30)
 - id: cf_m1p_r1
   phase: 3
   kind: run
   needs: [nc_g0, lora_g1]
-  after: [cf_m0_r1, cf_s1_r1]
-  plan: "11-18 13:55–15:55"
-  run: {model: improver@m1p, start_from: "frontier:nc_g0", history_from: "runs:nc_g0", policy_cfg: {threads: 1},
-        budget: {trials: 12}, rng_seed: 2004}
+  after: [cf_m0_r1]
+  plan: "11-18 06:25–08:25 lane 1"
+  run: {model: improver@m1p, lanes: [1], start_from: "frontier:nc_g0", history_from: "runs:nc_g0",
+        policy_cfg: {threads: 1}, budget: {trials: 12}, rng_seed: 2004}
   stop_when_trials: 12
   est_trial_s: 570
-  est_s: 7200
-  deadline: "2026-11-18T18:30"
+  est_s: 6840
+  deadline: "2026-11-18T11:30"
 
-# ─────────────── Phase 4 (11-18 afternoon/night): comparison policies; 27B fallback ───────────────
+- id: cf_m0_r2
+  phase: 2
+  kind: run
+  needs: [nc_g0]
+  after: [cf_s1_r1]
+  plan: "11-18 06:25–08:25 lane 3"
+  run: {model: improver, lanes: [3], start_from: "frontier:nc_g0", history_from: "runs:nc_g0",
+        policy_cfg: {threads: 1}, budget: {trials: 12}, rng_seed: 2101}
+  stop_when_trials: 12
+  est_trial_s: 570
+  est_s: 6840
+  deadline: "2026-11-18T11:30"
+
+- id: cf_s1_r2
+  phase: 2
+  kind: run
+  needs: [nc_g0, us_lessons_nc]
+  after: [cf_m1_r1]
+  plan: "11-18 06:25–08:25 lane 4"
+  run: {model: improver, scaffold_dir: "lessons:us_lessons_nc", lanes: [4], start_from: "frontier:nc_g0",
+        history_from: "runs:nc_g0", policy_cfg: {threads: 1}, budget: {trials: 12}, rng_seed: 2102}
+  stop_when_trials: 12
+  est_trial_s: 570
+  est_s: 6840
+  deadline: "2026-11-18T11:30"
+
+- id: cf_m1_r2
+  phase: 3
+  kind: run
+  needs: [nc_g0, lora_g1]
+  after: [ladder_nc, ladder_fb_nc]
+  plan: "11-18 06:30–08:30 lane 5"
+  run: {model: improver@m1, lanes: [5], start_from: "frontier:nc_g0", history_from: "runs:nc_g0",
+        policy_cfg: {threads: 1}, budget: {trials: 12}, rng_seed: 2103}
+  stop_when_trials: 12
+  est_trial_s: 570
+  est_s: 6840
+  deadline: "2026-11-18T12:00"
+
+- id: cf_m1p_r2
+  phase: 3
+  kind: run
+  needs: [nc_g0, lora_g1]
+  after: [lora_g3, ladder_fb_host]
+  plan: "11-18 06:30–08:30 lane 2"
+  run: {model: improver@m1p, lanes: [2], start_from: "frontier:nc_g0", history_from: "runs:nc_g0",
+        policy_cfg: {threads: 1}, budget: {trials: 12}, rng_seed: 2104}
+  stop_when_trials: 12
+  est_trial_s: 570
+  est_s: 6840
+  deadline: "2026-11-18T12:00"
+
+# block 3 (lanes 1, 3, 4, 5; ≈08:30–10:30)
+- id: cf_m0_r3
+  phase: 2
+  kind: run
+  needs: [nc_g0]
+  after: [cf_m1p_r1]
+  plan: "11-18 08:25–10:25 lane 1"
+  run: {model: improver, lanes: [1], start_from: "frontier:nc_g0", history_from: "runs:nc_g0",
+        policy_cfg: {threads: 1}, budget: {trials: 12}, rng_seed: 2201}
+  stop_when_trials: 12
+  est_trial_s: 570
+  est_s: 6840
+  latest_start: "2026-11-18T11:00"
+  deadline: "2026-11-18T13:30"
+
+- id: cf_s1_r3
+  phase: 2
+  kind: run
+  needs: [nc_g0, us_lessons_nc]
+  after: [cf_m0_r2]
+  plan: "11-18 08:25–10:25 lane 3"
+  run: {model: improver, scaffold_dir: "lessons:us_lessons_nc", lanes: [3], start_from: "frontier:nc_g0",
+        history_from: "runs:nc_g0", policy_cfg: {threads: 1}, budget: {trials: 12}, rng_seed: 2202}
+  stop_when_trials: 12
+  est_trial_s: 570
+  est_s: 6840
+  latest_start: "2026-11-18T11:00"
+  deadline: "2026-11-18T13:30"
+
+- id: cf_m1_r3
+  phase: 3
+  kind: run
+  needs: [nc_g0, lora_g1]
+  after: [cf_s1_r2]
+  plan: "11-18 08:25–10:25 lane 4"
+  run: {model: improver@m1, lanes: [4], start_from: "frontier:nc_g0", history_from: "runs:nc_g0",
+        policy_cfg: {threads: 1}, budget: {trials: 12}, rng_seed: 2203}
+  stop_when_trials: 12
+  est_trial_s: 570
+  est_s: 6840
+  latest_start: "2026-11-18T11:00"
+  deadline: "2026-11-18T13:30"
+
+- id: cf_m1p_r3
+  phase: 3
+  kind: run
+  needs: [nc_g0, lora_g1]
+  after: [cf_m1_r2]
+  plan: "11-18 08:30–10:30 lane 5"
+  run: {model: improver@m1p, lanes: [5], start_from: "frontier:nc_g0", history_from: "runs:nc_g0",
+        policy_cfg: {threads: 1}, budget: {trials: 12}, rng_seed: 2204}
+  stop_when_trials: 12
+  est_trial_s: 570
+  est_s: 6840
+  latest_start: "2026-11-18T11:00"
+  deadline: "2026-11-18T13:30"
+
+# ═══════════ Phase 4 (11-18 daytime/evening): comparison policies, web-off, 27B fallback ═══════════
 - id: ladder_fb_host         # ONLY if the remote 27B failed its gate: host 27B on GPU2 (lane 2 paused)
   phase: 4
   kind: service
-  after: [cf_m1_r1, cf_m1p_r1]
+  after: [lora_g3]
   requires_flags: ["!ladder27b_remote", nanochat]
   holds: [gpu2]
   lane: 2
@@ -767,138 +881,170 @@ steps:
   fail_flags: {ladder27b_local_failed: true}
   until: [ladder_fb_nc]
   load_s: 600
-  plan: "only on fallback: 11-18 16:00–20:00"
-  est_s: 14400
-  deadline: "2026-11-18T21:00"
+  plan: "fallback only: 11-18 ≈06:30–12:00 on GPU2"
+  est_s: 19800
+  deadline: "2026-11-18T13:00"
 
 - id: ladder_fb_nc
   phase: 4
   kind: run
-  after: [cf_m1_r1, cf_m1p_r1]
+  after: [lora_g3]
   requires_flags: ["!ladder27b_remote", nanochat]
   wait_for_flags: [ladder27b_local_up]
   skip_if_flags: [ladder27b_local_failed]
-  plan: "only on fallback: 1 thread × 20 trials on lane 1"
-  run: {model: ladder-27b, lanes: [1], policy_cfg: {threads: 1}, budget: {trials: 20}, rng_seed: 1100}
+  plan: "fallback only: 27B 2 threads × 30 on lane 5"
+  run: {model: ladder-27b, lanes: [5], policy_cfg: {threads: 2}, budget: {trials: 60}, rng_seed: 1100}
   fake: {needs_up: vllm_27b}
-  stop_when_trials: 20
-  est_trial_s: 660
-  est_s: 13200
-  latest_start: "2026-11-18T19:00"
-  deadline: "2026-11-18T20:45"
+  stop_when_trials: 60
+  est_trial_s: 420
+  est_s: 25200
+  latest_start: "2026-11-18T09:00"
+  deadline: "2026-11-18T12:30"
 
-- id: pol_recursive          # recursive_first_steps, K=2 threads, 60 evals incl. confirm seeds and merges
+- id: nc_weboff              # D4: web-off control — same as G0 but the mini harness (no web tools), 1 thread
   phase: 4
   kind: run
-  after: [cf_m1_r1, cf_m1p_r1, ladder_fb_host]
+  needs: [nc_g0]
+  after: [cf_m1p_r2]
   requires_flags: [nanochat, nanochat_9b]
-  plan: "11-18 15:55–20:55"
-  run: {policy: recursive_first_steps, policy_cfg: {threads: 2, confirm_seeds: [1, 2], merge_every: 5},
+  plan: "11-18 08:30–13:15 lane 2"
+  run: {model: improver, lanes: [2], harness: {kind: mini}, policy_cfg: {threads: 1}, budget: {trials: 30},
+        rng_seed: 1200}
+  stop_when_trials: 30
+  est_trial_s: 570
+  est_s: 17100
+  latest_start: "2026-11-18T13:00"
+  deadline: "2026-11-18T19:00"
+
+- id: pol_recursive          # recursive_first_steps, K=2 threads on lanes 1, 3; 60 evals incl. confirms and merges
+  phase: 4
+  kind: run
+  after: [cf_m0_r3, cf_s1_r3]
+  requires_flags: [nanochat, nanochat_9b]
+  plan: "11-18 10:25–15:25 lanes 1,3"
+  run: {policy: recursive_first_steps, lanes: [1, 3], policy_cfg: {threads: 2, confirm_seeds: [1, 2], merge_every: 5},
         budget: {trials: 60, evals: 60}, rng_seed: 4000}
   stop_when_trials: 60
   est_trial_s: 300
   est_s: 18000
-  latest_start: "2026-11-18T21:00"
-  deadline: "2026-11-19T00:30"
+  latest_start: "2026-11-18T14:00"
+  deadline: "2026-11-18T20:00"
 
-- id: pol_naive              # naive_trial_ledger, 2 threads, 60 evals (exploratory trials count)
+- id: pol_naive              # naive_trial_ledger, 2 threads on lanes 4, 5; 60 evals (exploratory trials count)
   phase: 4
   kind: run
-  after: [pol_recursive]
+  after: [cf_m1_r3, cf_m1p_r3]
   requires_flags: [nanochat, nanochat_9b]
-  plan: "11-18 20:55 – 11-19 01:55"
-  run: {policy: naive_trial_ledger, policy_cfg: {threads: 2}, budget: {trials: 60, evals: 60}, rng_seed: 5000}
+  plan: "11-18 10:30–15:30 lanes 4,5"
+  run: {policy: naive_trial_ledger, lanes: [4, 5], policy_cfg: {threads: 2}, budget: {trials: 60, evals: 60},
+        rng_seed: 5000}
   stop_when_trials: 60
   est_trial_s: 300
   est_s: 18000
-  latest_start: "2026-11-19T02:00"
-  deadline: "2026-11-19T05:00"
+  latest_start: "2026-11-18T14:00"
+  deadline: "2026-11-18T20:00"
 
-# ─────────────── Phase 5 (11-19): apex, CFF rep 2, endpoint confirmation ───────────────
-- id: pol_apex               # researcher swap M0 / M1 / 27B × 2 reps × 12-eval explore = 72 evals
+- id: pol_apex               # researcher swap M0 / M1 / 27B (one thread each, lanes 1, 3, 4) × 2 reps × 12 = 72 evals
+  phase: 4
+  kind: run
+  needs: [lora_g1]
+  after: [pol_recursive, pol_naive]
+  requires_flags: [nanochat, nanochat_9b]
+  plan: "11-18 15:30–19:30 lanes 1,3,4"
+  run: {policy: apex_ai4ai, lanes: [1, 3, 4], policy_cfg: {researchers: [improver, improver@m1, ladder-27b],
+        reps: 2, explore_trials: 12, threads: 3}, budget: {trials: 72}, rng_seed: 6000}
+  stop_when_trials: 72
+  est_trial_s: 200
+  est_s: 14400
+  latest_start: "2026-11-18T19:00"
+  deadline: "2026-11-19T00:30"
+
+- id: ladder_nc_r2           # replicate of the ladder (27B, 2 threads, now on lanes 2 and 5)
+  phase: 4
+  kind: run
+  after: [nc_weboff, pol_naive]
+  requires_flags: [nanochat, ladder27b_remote]
+  plan: "11-18 15:30–21:00 lanes 2,5"
+  run: {policy: karpathy_greedy, model: ladder-27b, lanes: [2, 5], policy_cfg: {threads: 2}, budget: {trials: 60},
+        rng_seed: 1101}
+  stop_when_trials: 60
+  est_trial_s: 330
+  est_s: 19800
+  latest_start: "2026-11-18T20:00"
+  deadline: "2026-11-19T02:00"
+
+# ═══════════ Phase 5 (11-18 night → 11-19): replicates, then the endpoint confirmation ═══════════
+- id: nc_g0_r2               # replicate of G0 (9B, 3 threads on lanes 1, 3, 4; new agent seed)
   phase: 5
   kind: run
-  after: [pol_naive]
-  needs: [lora_g1]
+  after: [pol_apex]
   requires_flags: [nanochat, nanochat_9b]
-  plan: "11-19 01:55–07:55"
-  run: {policy: apex_ai4ai, policy_cfg: {researchers: [improver, improver@m1, ladder-27b], reps: 2,
-        explore_trials: 12, threads: 2}, budget: {trials: 72}, rng_seed: 6000}
-  stop_when_trials: 72
+  plan: "11-18 19:30 – 11-19 00:15 lanes 1,3,4"
+  run: {policy: karpathy_greedy, model: improver, lanes: [1, 3, 4], policy_cfg: {threads: 3}, budget: {trials: 90},
+        rng_seed: 1001}
+  stop_when_trials: 90
+  est_trial_s: 190
+  est_s: 17100
+  latest_start: "2026-11-19T00:00"
+  deadline: "2026-11-19T05:00"
+
+- id: pol_recursive_r2
+  phase: 5
+  kind: run
+  after: [ladder_nc_r2]
+  requires_flags: [nanochat, nanochat_9b]
+  plan: "11-18 21:00 – 11-19 02:00 lanes 2,5"
+  run: {policy: recursive_first_steps, lanes: [2, 5], policy_cfg: {threads: 2, confirm_seeds: [1, 2], merge_every: 5},
+        budget: {trials: 60, evals: 60}, rng_seed: 4001}
+  stop_when_trials: 60
   est_trial_s: 300
-  est_s: 21600
+  est_s: 18000
   latest_start: "2026-11-19T04:00"
   deadline: "2026-11-19T09:00"
 
-- id: cf_m0_r2               # rep 2: lanes swapped relative to rep 1 is irrelevant (shared FIFO)
+- id: pol_naive_r2
   phase: 5
   kind: run
-  needs: [nc_g0]
-  after: [pol_apex]
+  after: [nc_g0_r2]
   requires_flags: [nanochat, nanochat_9b]
-  plan: "11-19 07:55–09:55"
-  run: {model: improver, start_from: "frontier:nc_g0", history_from: "runs:nc_g0", policy_cfg: {threads: 1},
-        budget: {trials: 12}, rng_seed: 2101}
-  stop_when_trials: 12
-  est_trial_s: 570
-  est_s: 7200
-  latest_start: "2026-11-19T10:00"
-  deadline: "2026-11-19T12:30"
+  plan: "11-19 00:15–05:15 lanes 1,3"
+  run: {policy: naive_trial_ledger, lanes: [1, 3], policy_cfg: {threads: 2}, budget: {trials: 60, evals: 60},
+        rng_seed: 5001}
+  stop_when_trials: 60
+  est_trial_s: 300
+  est_s: 18000
+  latest_start: "2026-11-19T06:00"
+  deadline: "2026-11-19T11:00"
 
-- id: cf_s1_r2
+- id: pol_apex_r2
   phase: 5
   kind: run
-  needs: [nc_g0, us_lessons_nc]
-  after: [pol_apex]
-  plan: "11-19 07:55–09:55"
-  run: {model: improver, scaffold_dir: "lessons:us_lessons_nc", start_from: "frontier:nc_g0",
-        history_from: "runs:nc_g0", policy_cfg: {threads: 1}, budget: {trials: 12}, rng_seed: 2102}
-  stop_when_trials: 12
-  est_trial_s: 570
-  est_s: 7200
-  latest_start: "2026-11-19T10:00"
-  deadline: "2026-11-19T12:30"
+  needs: [lora_g1]
+  after: [pol_recursive_r2, nc_g0_r2]
+  requires_flags: [nanochat, nanochat_9b]
+  plan: "11-19 02:00–06:00 lanes 2,4,5"
+  run: {policy: apex_ai4ai, lanes: [2, 4, 5], policy_cfg: {researchers: [improver, improver@m1, ladder-27b],
+        reps: 2, explore_trials: 12, threads: 3}, budget: {trials: 72}, rng_seed: 6001}
+  stop_when_trials: 72
+  est_trial_s: 200
+  est_s: 14400
+  latest_start: "2026-11-19T07:00"
+  deadline: "2026-11-19T12:00"
 
-- id: cf_m1_r2
-  phase: 5
-  kind: run
-  needs: [nc_g0, lora_g1]
-  after: [cf_m0_r2, cf_s1_r2]
-  plan: "11-19 09:55–11:55"
-  run: {model: improver@m1, start_from: "frontier:nc_g0", history_from: "runs:nc_g0", policy_cfg: {threads: 1},
-        budget: {trials: 12}, rng_seed: 2103}
-  stop_when_trials: 12
-  est_trial_s: 570
-  est_s: 7200
-  latest_start: "2026-11-19T12:00"
-  deadline: "2026-11-19T14:30"
-
-- id: cf_m1p_r2
-  phase: 5
-  kind: run
-  needs: [nc_g0, lora_g1]
-  after: [cf_m0_r2, cf_s1_r2]
-  plan: "11-19 09:55–11:55"
-  run: {model: improver@m1p, start_from: "frontier:nc_g0", history_from: "runs:nc_g0", policy_cfg: {threads: 1},
-        budget: {trials: 12}, rng_seed: 2104}
-  stop_when_trials: 12
-  est_trial_s: 570
-  est_s: 7200
-  latest_start: "2026-11-19T12:00"
-  deadline: "2026-11-19T14:30"
-
-- id: endpoint               # top-3 NanoChat artifacts + vanilla start × 10 seeds = 40 evals
+- id: endpoint               # top-3 NanoChat artifacts + vanilla start × 10 seeds = 40 evals over 5 lanes
   phase: 5
   kind: endpoint
-  after: [cf_m1_r2, cf_m1p_r2, pol_apex, pol_naive, pol_recursive, ladder_nc, ladder_fb_nc]
+  after: [cf_m0_r3, cf_s1_r3, cf_m1_r3, cf_m1p_r3, nc_weboff, pol_naive_r2, pol_apex_r2, pol_recursive_r2,
+          ladder_fb_nc]
   requires_flags: [nanochat]
-  sources: [nc_g0, ladder_nc, cf_m0_r1, cf_s1_r1, cf_m1_r1, cf_m1p_r1, pol_recursive, pol_naive, pol_apex,
-            cf_m0_r2, cf_s1_r2, cf_m1_r2, cf_m1p_r2, ladder_fb_nc]
+  sources: [nc_g0, ladder_nc, cf_m0_r1, cf_s1_r1, cf_m1_r1, cf_m1p_r1, cf_m0_r2, cf_s1_r2, cf_m1_r2, cf_m1p_r2,
+            cf_m0_r3, cf_s1_r3, cf_m1_r3, cf_m1p_r3, nc_weboff, pol_recursive, pol_naive, pol_apex, ladder_nc_r2,
+            nc_g0_r2, pol_recursive_r2, pol_naive_r2, pol_apex_r2, ladder_fb_nc]
   top_k: 3
   seeds: [100, 101, 102, 103, 104, 105, 106, 107, 108, 109]
   include_start: "{nanochat_start}"
-  plan: "11-19 11:55–14:20"
-  est_s: 8700                # 40 evals / 17 per h 〔估算〕
+  plan: "11-19 06:00–07:00"
+  est_s: 3600                # 40 evals / ≈42 per h 〔估算〕
   latest_start: "2026-11-19T15:00"
   deadline: "2026-11-19T17:45"
 

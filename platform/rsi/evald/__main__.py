@@ -195,7 +195,8 @@ def main(argv=None) -> int:
     v.add_argument("--csv")
     t = sub.add_parser("selftest")
     _common(t)
-    t.add_argument("--gpu", type=int, default=1)
+    t.add_argument("--gpu", default="1", help='nvidia-smi index, or "slurm" inside a remote step')
+    t.add_argument("--lane", type=int, help="test this configured lane (remote lanes go through srun)")
     t.add_argument("--skip-prepare", action="store_true")
     t.add_argument("--smoke", action="store_true", help="also train+score the vanilla start for ~30 s")
     a = ap.parse_args(argv)
@@ -203,9 +204,19 @@ def main(argv=None) -> int:
         return cmd_serve(a)
     if a.cmd == "vanilla":
         return cmd_vanilla(a)
-    from rsi.evald.selftest import run_selftest
+    from rsi.evald.selftest import run_remote_selftest, run_selftest
 
-    return run_selftest(_cfg_from_args(a), gpu=a.gpu, prepare=not a.skip_prepare, smoke=a.smoke)
+    cfg = _cfg_from_args(a)
+    if a.lane is not None:
+        lane = next((l for l in cfg.lanes if l.lane == a.lane), None)
+        if lane is None:
+            print(f"lane {a.lane} not in --lanes {a.lanes}", file=sys.stderr)
+            return 2
+        if lane.remote:
+            return run_remote_selftest(cfg, a.lane, prepare=not a.skip_prepare, smoke=a.smoke)
+        a.gpu = lane.gpu
+    gpu = a.gpu if a.gpu == "slurm" else int(a.gpu)
+    return run_selftest(cfg, gpu=gpu, prepare=not a.skip_prepare, smoke=a.smoke)
 
 
 if __name__ == "__main__":

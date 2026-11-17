@@ -451,6 +451,8 @@ def test_recursive_l3_critic_rolls_back_hack(tmp_path):
     assert s["flagged"], "critic should flag a cache hack"
     assert s["rules_version"] > 1
     assert s["best_hash"] not in s["flagged"]
+    # the final best carries no hack: flagged artifacts and their descendants were rolled back
+    assert "cache" not in json.loads((ctx.run_dir / "artifacts" / s["best_hash"] / "params.json").read_text())
     assert (ctx.run_dir / "audits" / "rules.md").exists()
     evs = check_events(ctx.run_dir)
     assert any(e["ev"] == "decision" and e["verdict"] == "rollback" for e in evs)

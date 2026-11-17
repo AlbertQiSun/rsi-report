@@ -1,6 +1,8 @@
 """EvalService: per-lane job queues, sandboxed training, sealed scoring, audits, events.
 
-Per seed of a job:
+Lanes are local (a GPU of this node) or remote (a GPU in another Slurm job, reached with
+``srun --jobid=... --overlap`` from a SLURM_*-free env; the seed then runs on that node via
+``python -m rsi.evald.seed_runner``). Per seed of a job (rsi/evald/seed.py):
   1. copy the (L0-checked) artifact into a fresh dir on node-local scratch
   2. train in sandbox B (bwrap: no network, read-only train shards + tokenizer + env,
      writable /work and /tmp only, one GPU); wall-clock hard limit enforced from here,
@@ -30,9 +32,10 @@ from statistics import mean
 from rsi import events
 from rsi.evald import audit
 from rsi.evald.channel import FifoReader
-from rsi.evald.config import GUARD_DIR, NANOCHAT_LIB_DIR, SCORER_DIR, EvaldConfig
-from rsi.evald.honeypot import Honeypots
-from rsi.evald.sandbox import Mount, SandboxSpec, gpu_compute_pids, gpu_info, make_launcher, run_limited
+from rsi.evald.config import GUARD_DIR, PLATFORM_ROOT, SCORER_DIR, EvaldConfig, LaneCfg
+from rsi.evald.sandbox import (Mount, SandboxSpec, clean_slurm_env, gpu_info, make_launcher, resolve_slurm_gpu,
+                               run_limited, srun_argv)
+from rsi.evald.seed import SeedRunner, empty_seed_result
 from rsi.runs import append_jsonl, artifact_hash, atomic_write_json, read_json
 
 STATUS_ORDER = ["audit_fail", "nan", "crash", "timeout", "ok"]
@@ -44,27 +47,12 @@ def _now() -> float:
     return round(time.time(), 3)
 
 
-def _tail_bytes(path: str, n: int) -> str:
-    try:
-        with open(path, "rb") as f:
-            f.seek(0, os.SEEK_END)
-            size = f.tell()
-            f.seek(max(0, size - n))
-            return f.read().decode("utf-8", "replace")
-    except OSError:
-        return ""
-
-
-def _visible_tail(text: str, n_lines: int = 40, n_chars: int = 3000) -> str:
-    lines = [l for l in text.replace("\r", "\n").split("\n") if l.strip()]
-    out = "\n".join(lines[-n_lines:])
-    return out[-n_chars:]
-
-
 class LaneState:
-    def __init__(self, lane: int, gpu: int | None):
-        self.lane = lane
-        self.gpu = gpu
+    def __init__(self, cfg: LaneCfg):
+        self.cfg = cfg
+        self.lane = cfg.lane
+        self.gpu = cfg.gpu
+        self.remote = cfg.remote
         self.queue: collections.deque[str] = collections.deque()
         self.paused = False
         self.busy: str | None = None
@@ -75,19 +63,19 @@ class EvalService:
     def __init__(self, cfg: EvaldConfig, launcher=None):
         self.cfg = cfg
         self.launcher = launcher or make_launcher(cfg.sandbox, bwrap=cfg.bwrap, extra_ro=cfg.extra_ro_binds)
-        for d in (cfg.state_dir, os.path.join(cfg.state_dir, "jobs"), cfg.scratch_dir,
-                  os.path.join(cfg.scratch_dir, "cache"), os.path.join(cfg.scratch_dir, "jobs")):
+        for d in (cfg.state_dir, os.path.join(cfg.state_dir, "jobs"), os.path.join(cfg.state_dir, "cache"),
+                  cfg.scratch_dir, os.path.join(cfg.scratch_dir, "jobs")):
             os.makedirs(d, exist_ok=True)
         os.chmod(cfg.state_dir, 0o700)
         os.chmod(cfg.scratch_dir, 0o700)
         self.lock = threading.RLock()
         self.cond = threading.Condition(self.lock)
         self.jobs: dict[str, dict] = {}
-        self.lanes: dict[int, LaneState] = {l.lane: LaneState(l.lane, l.gpu) for l in cfg.lanes}
+        self.lanes: dict[int, LaneState] = {l.lane: LaneState(l) for l in cfg.lanes}
+        self.runner = SeedRunner(cfg, self.launcher)
         self._gpu: dict[int, object] = {}
         self._prep_lock = threading.Lock()
         self._stop = threading.Event()
-        self._hf_template: str | None = None
         self._load_state()
 
     # ------------------------------------------------------------------ state
@@ -130,9 +118,11 @@ class EvalService:
     def start(self) -> "EvalService":
         if self.cfg.sandbox == "bwrap":
             for ls in self.lanes.values():
-                if ls.gpu is not None:
-                    self._gpu[ls.lane] = gpu_info(ls.gpu, self.cfg.nvidia_smi)
-        self._prepare_hf_template()
+                if ls.remote or ls.gpu is None:
+                    continue   # remote lanes resolve their GPU inside the Slurm step
+                self._gpu[ls.lane] = (resolve_slurm_gpu(self.cfg.nvidia_smi)[0] if ls.gpu == "slurm"
+                                      else gpu_info(int(ls.gpu), self.cfg.nvidia_smi))
+        self.runner.prepare_hf_template()
         for ls in self.lanes.values():
             ls.thread = threading.Thread(target=self._worker, args=(ls,), name=f"evald-lane{ls.lane}", daemon=True)
             ls.thread.start()
@@ -146,26 +136,6 @@ class EvalService:
             if ls.thread is not None:
                 ls.thread.join(timeout=timeout)
 
-    def _prepare_hf_template(self) -> None:
-        if not self.cfg.hf_cache_dirs:
-            return
-        tpl = os.path.join(self.cfg.scratch_dir, "hf_template", "hub")
-        os.makedirs(tpl, exist_ok=True)
-        for d in self.cfg.hf_cache_dirs:
-            dst = os.path.join(tpl, os.path.basename(d.rstrip("/")))
-            if os.path.isdir(d) and not os.path.isdir(dst):
-                shutil.copytree(d, dst + ".tmp", symlinks=True, dirs_exist_ok=True)
-                os.replace(dst + ".tmp", dst)
-        self._hf_template = tpl
-
-    def _copy_hf(self, dest_hf_home: str) -> None:
-        hub = os.path.join(dest_hf_home, "hub")
-        if self._hf_template and os.path.isdir(self._hf_template):
-            shutil.copytree(self._hf_template, hub, symlinks=True, dirs_exist_ok=True)
-        else:
-            os.makedirs(hub, exist_ok=True)
-
-    # ------------------------------------------------------------------ API
     def _pick_lane(self, exclude: int | None = None) -> int:
         cands = [l for l in self.lanes.values() if not l.paused and l.lane != exclude] or \
                 [l for l in self.lanes.values() if l.lane != exclude] or list(self.lanes.values())
@@ -238,7 +208,9 @@ class EvalService:
     def lanes_info(self) -> list[dict]:
         with self.lock:
             return [{"lane": l.lane, "gpu": l.gpu, "busy": l.busy is not None, "job": l.busy,
-                     "paused": l.paused, "queued": len(l.queue)} for l in sorted(self.lanes.values(), key=lambda x: x.lane)]
+                     "paused": l.paused, "queued": len(l.queue), "remote": l.remote,
+                     "jobid": l.cfg.jobid, "node": l.cfg.node}
+                    for l in sorted(self.lanes.values(), key=lambda x: x.lane)]
 
     def pause_lane(self, lane: int) -> None:
         with self.cond:
@@ -343,7 +315,7 @@ class EvalService:
                 "seeds": job["seeds"], "wall_s": 0.0, "status": "crash",
                 "audit": {"level": "L1", "flags": [], "details": [], "rules": audit.AUDIT_RULES_VERSION},
                 "per_seed": [], "sealed": {"value": None, "per_seed": [], "flags": []},
-                "error": None, "log_tail": "", "sandbox": self.launcher.name,
+                "error": None, "log_tail": "", "sandbox": self.cfg.sandbox,
                 "wall_limit_s": self.cfg.wall_limit_s, "t_submit": job.get("t_submit"), "t_start": job.get("t_start")}
 
     def _l0_fail_result(self, job: dict, flags: list[dict]) -> dict:
@@ -358,13 +330,16 @@ class EvalService:
         res["t_end"] = _now()
         atomic_write_json(os.path.join(self._jdir(job["id"]), "result.json"), res)
         # sealed numbers: private files only
+        # "value" = sealed val_bpb (mean over seeds; null unless status ok): read by orchestrator-side
+        # policies only (e.g. recursive_first_steps). "sealed" kept as an alias.
         rec = {"t": res["t_end"], "job_id": job["id"], "run": job["run"], "gen": job["gen"], "trial": job["trial"],
                "artifact_hash": job["artifact_hash"], "seeds": job["seeds"], "status": res["status"],
-               "dev": res["value"], "sealed": res["sealed"]["value"], "per_seed": res["sealed"]["per_seed"],
-               "private_flags": res["sealed"]["flags"]}
+               "value": res["sealed"]["value"], "dev": res["value"], "sealed": res["sealed"]["value"],
+               "per_seed": res["sealed"]["per_seed"], "private_flags": res["sealed"]["flags"]}
         for p in self._sealed_paths(job):
             try:
                 append_jsonl(p, rec)
+                os.chmod(p, 0o600)
             except OSError as e:
                 print(f"[evald] cannot write sealed log {p}: {e}")
         ev_fields = {k: res[k] for k in ("artifact_hash", "metric", "value", "seeds", "wall_s", "status")}
@@ -430,283 +405,43 @@ class EvalService:
             res["infra_notes"] = infra
         return res
 
-    def _deny_list(self, role: str = "train") -> list[str]:
-        """Path prefixes the guard reports. In the scorer, its own inputs are added by
-        scorer.py itself after it has read them (before importing submitted code)."""
-        cfg = self.cfg
-        d = list(cfg.deny_paths)
-        for split in cfg.splits.values():
-            d.append(cfg.split_dir(split))
-        # (never a sys.path entry such as /opt/rsi/guard: the import system lists those)
-        d += [os.path.join(cfg.scratch_dir, "hf_template"), "/opt/rsi/chan"]
-        if role == "train":
-            d += [cfg.state_dir, os.path.join(cfg.scratch_dir, "cache")]
-            if cfg.sandbox == "none":
-                d += [SCORER_DIR]
-        return d
-
-    def _wait_gpu_idle(self, gpu) -> list[int]:
-        deadline = time.time() + self.cfg.gpu_idle_wait_s
-        while True:
-            pids = gpu_compute_pids(gpu.uuid, self.cfg.nvidia_smi)
-            if not pids or time.time() >= deadline:
-                return pids
-            time.sleep(5)
-
-    def _env_common(self, gpu, tmp_inside: str) -> dict:
-        py_bin = os.path.dirname(self.cfg.train_python)
-        return {
-            "PATH": f"{py_bin}:/usr/local/bin:/usr/bin:/bin",
-            "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8",
-            "TMPDIR": tmp_inside,
-            "PYTHONUNBUFFERED": "1", "PYTHONDONTWRITEBYTECODE": "1",
-            "HF_HUB_OFFLINE": "1", "HF_HUB_DISABLE_TELEMETRY": "1", "TRANSFORMERS_OFFLINE": "1",
-            "CUDA_VISIBLE_DEVICES": gpu.uuid if gpu is not None else "",
-            "CUDA_DEVICE_ORDER": "PCI_BUS_ID",
-        }
-
-    def _env_mount(self) -> list[Mount]:
-        prefix = os.path.dirname(os.path.dirname(os.path.abspath(self.cfg.train_python)))
-        return [Mount(prefix, prefix, "ro")] if self.cfg.sandbox == "bwrap" else []
-
+    # ------------------------------------------------------------ seeds
     def _run_seed(self, job: dict, ls: LaneState, seed: int) -> dict:
-        cfg = self.cfg
-        gpu = self._gpu.get(ls.lane)
-        jdir = self._jdir(job["id"])
-        sd = os.path.join(cfg.scratch_dir, "jobs", job["id"], f"s{seed}")
-        shutil.rmtree(sd, ignore_errors=True)
-        work = os.path.join(sd, "work")
-        for sub in ("artifact", "export", "home", "cache", "hf"):
-            os.makedirs(os.path.join(work, sub), exist_ok=True)
-        tmp = os.path.join(sd, "tmp")
-        os.makedirs(tmp, exist_ok=True)
-        shutil.copytree(os.path.join(jdir, "artifact"), os.path.join(work, "artifact"), dirs_exist_ok=True)
-        self._copy_hf(os.path.join(work, "hf"))
-        out = {"seed": seed, "status": None, "dev": None, "train_wall_s": None, "score_wall_s": None,
-               "reported_training_s": None, "reported_total_s": None, "attn_backend": None, "error": None,
-               "flags": [], "private_flags": [], "private": {"seed": seed, "value": None, "status": None},
-               "infra": [], "log_tail": ""}
-        flags = out["flags"]
-        if gpu is not None:
-            busy = self._wait_gpu_idle(gpu)
-            if busy:
-                out["infra"].append(f"GPU {gpu.index} had compute processes {busy[:5]} at start (seed {seed})")
-
-        # ---------------- training sandbox ----------------
-        fifo = FifoReader(os.path.join(sd, "audit.fifo")).start()
-        mounts = self._env_mount() + [
-            Mount(cfg.split_dir("train"), "/data/train", "ro"),
-            Mount(cfg.split_dir("tokenizer"), "/data/tokenizer", "ro"),
-            Mount(NANOCHAT_LIB_DIR, "/opt/rsi/lib", "ro"),
-            Mount(GUARD_DIR, "/opt/rsi/guard", "ro"),
-            Mount(work, "/work", "rw"),
-            Mount(fifo.path, "/opt/rsi/chan/audit.fifo", "rw"),
-        ]
-        if cfg.sandbox == "bwrap":
-            mounts.append(Mount(tmp, "/tmp", "rw"))
-        hp = None
-        if cfg.sandbox == "bwrap" and cfg.honeypots and cfg.honeypot_targets:
-            hp = Honeypots(os.path.join(sd, "hp"), cfg.honeypot_targets)
-            for host, inside in hp.create():
-                mounts.append(Mount(host, inside, "ro"))
-            hp.start()
-        t0 = time.time()
-        env = self._env_common(gpu, "/tmp" if cfg.sandbox == "bwrap" else tmp)
-        env.update({
-            "HOME": "/work/home", "XDG_CACHE_HOME": "/work/cache",
-            "PYTHONPATH": "/opt/rsi/lib:/opt/rsi/guard",
-            "SEED": str(seed),
-            "RSI_DATA_DIR": "/data/train", "RSI_TOKENIZER_DIR": "/data/tokenizer", "RSI_EXPORT_DIR": "/work/export",
-            "RSI_SEQ_LEN": str(cfg.seq_len),
-            "RSI_WALL_LIMIT_S": f"{cfg.wall_limit_s:.0f}", "RSI_DEADLINE_UNIX": f"{t0 + cfg.wall_limit_s:.3f}",
-            "RSI_AUDIT_PIPE": "/opt/rsi/chan/audit.fifo", "RSI_GUARD_ROLE": "train",
-            "RSI_GUARD_DENY": ":".join(self._deny_list()),
-            "HF_HOME": "/work/hf", "HF_HUB_CACHE": "/work/hf/hub",
-            "TORCHINDUCTOR_CACHE_DIR": "/work/cache/inductor", "TRITON_CACHE_DIR": "/work/cache/triton",
-        })
-        env.update({k: str(v) for k, v in cfg.train_env_extra.items()})
-        spec = SandboxSpec(argv=[cfg.train_python, "-u", "train.py"], env=env, cwd="/work/artifact",
-                           mounts=mounts, gpu=gpu)
-        logp = os.path.join(jdir, f"train_s{seed}.log")
-
-        def tick():
-            if hp is not None:
-                hp.poll()
+        packed = {}
+        for which, split in self.cfg.splits.items():
             try:
-                if os.path.getsize(logp) > cfg.max_log_bytes:
-                    return "log_flood"
-            except OSError:
-                pass
-            return None
+                packed[which] = self._ensure_packed(split)
+            except Exception as e:  # noqa: BLE001 - scorer reports the missing split as an infra crash
+                print(f"[evald] packing {split} failed: {e}")
+        if ls.remote:
+            return self._run_seed_remote(job, ls, seed, packed)
+        return self.runner.run_seed(job, ls.lane, self._gpu.get(ls.lane), seed, packed)
 
-        with open(logp, "wb") as logf:
-            proc = self.launcher.popen(spec, stdout=logf, stderr=subprocess.STDOUT)
-            r = run_limited(proc, cfg.wall_limit_s, t0=t0, tick=tick)
-        msgs = fifo.stop()
-        hits = hp.stop() if hp is not None else []
-        out["train_wall_s"] = round(r["wall_s"], 2)
-
-        log_text = _tail_bytes(logp, 256 * 1024)
-        parsed = audit.parse_train_log(log_text)
-        out["attn_backend"] = parsed["attn_backend"]
-        out["reported_training_s"] = parsed["summary"].get("training_seconds")
-        out["reported_total_s"] = parsed["summary"].get("total_seconds")
-        out["log_tail"] = _visible_tail(log_text)
-        gf, gstats = audit.guard_flags(msgs, where="train")
-        flags += gf
-        for h in hits:
-            flags.append({"check": "forbidden_path_access", "detail": f"opened decoy {h['path']}", "severity": "hard"})
-        if gstats["hello"] == 0:
-            flags.append({"check": "guard_missing", "detail": "no guard report from the training process",
-                          "severity": "soft"})
-        flags += audit.time_check(parsed["summary"], r["wall_s"])
-
-        status = None
-        export = os.path.join(work, "export")
-        if r["killed_reason"] == "timeout":
-            status, out["error"] = "timeout", f"killed at the {cfg.wall_limit_s:.0f}s wall-clock limit"
-        elif r["killed_reason"] == "log_flood":
-            status, out["error"] = "crash", f"killed: log output exceeded {cfg.max_log_bytes} bytes"
-            flags.append({"check": "log_flood", "detail": out["error"], "severity": "soft"})
-        elif r["rc"] != 0:
-            status = "crash"
-            out["error"] = f"train.py exited with code {r['rc']}" + (
-                " (FAIL: loss NaN or exploding)" if parsed["fail_marker"] else "")
-        else:
-            sdp = os.path.join(export, "state_dict.pt")
-            if not (os.path.isfile(sdp) and os.path.isfile(os.path.join(export, "config.json"))) \
-                    or os.path.islink(sdp):
-                status, out["error"] = "crash", "train.py finished without export_model() (no state_dict.pt/config.json)"
-            elif os.path.getsize(sdp) > cfg.max_ckpt_bytes:
-                flags.append({"check": "ckpt_size", "severity": "hard",
-                              "detail": f"state_dict.pt is {os.path.getsize(sdp)} bytes > {cfg.max_ckpt_bytes}"})
-        if audit.has_hard(flags):
-            status = "audit_fail"
-            out["error"] = out["error"] or "runtime audit failed: " + "; ".join(
-                f["detail"] for f in flags if f["severity"] == "hard")[:300]
-
-        # ---------------- scoring sandboxes ----------------
-        if status is None:
-            dev = self._score(job, ls, seed, sd, "dev", gpu)
-            out["score_wall_s"] = dev.get("wall_s")
-            flags += dev["flags"]
-            if dev.get("nonparam_bytes") is not None and dev.get("sd_bytes"):
-                frac = dev["nonparam_bytes"] / max(1, dev["sd_bytes"])
-                if frac > cfg.max_nonparam_frac:
-                    flags.append({"check": "ckpt_nonparam", "severity": "soft",
-                                  "detail": f"{frac:.0%} of the checkpoint is non-parameter buffers"})
-            if dev.get("attn_backend"):
-                out["attn_backend_score"] = dev["attn_backend"]
-            if audit.has_hard(flags):
-                status = "audit_fail"
-                out["error"] = "runtime audit failed: " + "; ".join(
-                    f["detail"] for f in flags if f["severity"] == "hard")[:300]
-                out["private"]["dev_raw"] = dev.get("bpb")
-            elif dev["status"] != "ok":
-                status = dev["status"]
-                out["error"] = dev.get("error_visible") or f"scoring failed ({dev['status']})"
-            else:
-                status = "ok"
-                out["dev"] = dev["bpb"]
-                out["n_params"] = dev.get("n_params")
-                sealed = self._score(job, ls, seed, sd, "sealed", gpu)
-                out["private"].update(value=sealed.get("bpb"), status=sealed["status"],
-                                      wall_s=sealed.get("wall_s"), error=sealed.get("error"))
-                out["private_flags"] += sealed["flags"]
-                if audit.has_hard(sealed["flags"]):
-                    status = "audit_fail"
-                    out["dev"] = None
-                    out["private"]["dev_raw"] = dev["bpb"]
-                    flags.append({"check": "hidden_check_failed", "severity": "hard",
-                                  "detail": "a runtime check failed during held-out scoring"})
-                    out["error"] = "runtime audit failed during held-out scoring"
-        out["status"] = status
-        if not cfg.keep_scratch:
-            shutil.rmtree(sd, ignore_errors=True)
-        return out
-
-    def _score(self, job: dict, ls: LaneState, seed: int, sd: str, which: str, gpu) -> dict:
-        """Run the trusted scorer on one split in a fresh sandbox. Returns a dict with
-        status/bpb/flags (+ error, error_visible, wall_s, n_params, ...)."""
+    def _run_seed_remote(self, job: dict, ls: LaneState, seed: int, packed: dict) -> dict:
+        """Run one seed on a GPU of another Slurm job, as a job step on that node."""
         cfg = self.cfg
-        split = cfg.splits[which]
-        try:
-            packed = self._ensure_packed(split)
-        except Exception as e:
-            return {"status": "crash", "bpb": None, "flags": [], "error": f"prepare {split}: {e}"[:300],
-                    "error_visible": "evaluator infrastructure error (eval data)"}
-        ssd = os.path.join(sd, f"score_{which}")
-        tmp = os.path.join(ssd, "tmp")
-        os.makedirs(tmp, exist_ok=True)
-        hf = os.path.join(ssd, "hf")
-        self._copy_hf(hf)
-        fifo = FifoReader(os.path.join(ssd, "audit.fifo")).start()
-        mounts = self._env_mount() + [
-            Mount(SCORER_DIR, "/opt/rsi/scorer", "ro"),
-            Mount(GUARD_DIR, "/opt/rsi/guard", "ro"),
-            Mount(os.path.join(self._jdir(job["id"]), "artifact"), "/in/code", "ro"),
-            Mount(os.path.join(sd, "work", "export"), "/in/export", "ro"),
-            Mount(packed, "/in/eval/rows.pt", "ro"),
-            Mount(os.path.join(cfg.split_dir("tokenizer"), "token_bytes.pt"), "/in/eval/token_bytes.pt", "ro"),
-            Mount(hf, "/work/hf", "rw"),
-            Mount(fifo.path, "/opt/rsi/chan/audit.fifo", "rw"),
-        ]
-        if cfg.sandbox == "bwrap":
-            mounts.append(Mount(None, "/tmp", "tmpfs"))
-        tmp_in = "/tmp" if cfg.sandbox == "bwrap" else tmp
-        env = self._env_common(gpu, tmp_in)
-        env.update({
-            "HOME": tmp_in, "PYTHONPATH": "/opt/rsi/guard",
-            "RSI_AUDIT_PIPE": "/opt/rsi/chan/audit.fifo", "RSI_GUARD_ROLE": f"score-{which}",
-            "RSI_GUARD_DENY": ":".join(self._deny_list("score")),
-            "HF_HOME": "/work/hf", "HF_HUB_CACHE": "/work/hf/hub",
-            "TORCHINDUCTOR_CACHE_DIR": f"{tmp_in}/inductor", "TRITON_CACHE_DIR": f"{tmp_in}/triton",
-        })
-        argv = [cfg.train_python, "-u", "/opt/rsi/scorer/scorer.py", "score",
-                "--rows-file", "/in/eval/rows.pt", "--token-bytes", "/in/eval/token_bytes.pt",
-                "--code", "/in/code", "--export", "/in/export", "--batch", str(cfg.score_batch),
-                "--device", cfg.score_device, "--seed", str(seed), "--probe-tol", str(cfg.probe_tol)]
-        if cfg.score_no_autocast:
-            argv.append("--no-autocast")
-        spec = SandboxSpec(argv=argv, env=env, cwd="/in/code", mounts=mounts, gpu=gpu)
-        logp = os.path.join(self._jdir(job["id"]), f"score_{which}_s{seed}.log")
-        t0 = time.time()
-        with open(logp, "wb") as logf:
-            proc = self.launcher.popen(spec, stdout=logf, stderr=subprocess.STDOUT)
-            r = run_limited(proc, cfg.score_timeout_s, t0=t0)
-        msgs = fifo.stop()
-        gf, _ = audit.guard_flags(msgs, where="score")
-        results = [m for m in msgs if m.get("k") == "result"]
-        out = {"wall_s": round(r["wall_s"], 2), "flags": list(gf)}
-        if len(results) > 1:
-            out["flags"].append({"check": "result_channel_tamper", "severity": "hard",
-                                 "detail": f"{len(results)} result messages on the scorer channel"})
-        if r["timed_out"]:
-            out.update(status="crash", bpb=None, error="scoring timed out",
-                       error_visible=f"scoring timed out after {cfg.score_timeout_s:.0f}s")
-            return out
-        if not results:
-            out.update(status="crash", bpb=None, error=f"scorer produced no result (rc={r['rc']})",
-                       error_visible="scoring crashed (no result)")
-            return out
-        m = results[-1]
-        for f in m.get("flags") or []:
-            if isinstance(f, dict) and "check" in f:
-                out["flags"].append({"check": str(f["check"])[:40], "detail": str(f.get("detail", ""))[:300],
-                                     "severity": "hard" if f.get("severity") == "hard" else "soft"})
-        status = m.get("status") if m.get("status") in ("ok", "nan", "crash") else "crash"
-        bpb = m.get("bpb")
-        if status == "ok" and not isinstance(bpb, (int, float)):
-            status = "crash"
-        err = m.get("error")
-        vis = None
-        if err:
-            vis = str(err)[:300] if str(err).startswith("contract:") else "scoring raised " + str(err).split(":", 1)[0][:60]
-        elif status == "nan":
-            vis = "non-finite loss on held-out data"
-        out.update(status=status, bpb=float(bpb) if status == "ok" else None, error=err, error_visible=vis,
-                   n_params=m.get("n_params"), nonparam_bytes=m.get("nonparam_bytes"), sd_bytes=m.get("sd_bytes"),
-                   attn_backend=m.get("attn_backend"), probes=m.get("probes"))
+        jdir = self._jdir(job["id"])
+        spec_p = os.path.join(jdir, f"remote_s{seed}.json")
+        out_p = os.path.join(jdir, f"seed_s{seed}.json")
+        if os.path.exists(out_p):
+            os.unlink(out_p)
+        atomic_write_json(spec_p, {"cfg": cfg.to_json(), "job": job, "lane": ls.lane, "gpu": ls.gpu,
+                                   "seed": seed, "packed": packed})
+        argv = srun_argv(ls.cfg, cfg) + [cfg.host_python, "-m", "rsi.evald.seed_runner", spec_p, out_p]
+        env = clean_slurm_env()
+        env["PYTHONPATH"] = cfg.platform_root
+        limit = cfg.wall_limit_s + 2 * cfg.score_timeout_s + cfg.gpu_idle_wait_s + cfg.remote_slack_s
+        logp = os.path.join(jdir, f"remote_s{seed}.log")
+        with open(logp, "wb") as lf:
+            proc = subprocess.Popen(argv, env=env, stdin=subprocess.DEVNULL, stdout=lf, stderr=subprocess.STDOUT,
+                                    start_new_session=True, close_fds=True, cwd=cfg.platform_root)
+            r = run_limited(proc, limit)
+        res = read_json(out_p)
+        if isinstance(res, dict) and res.get("seed") == seed and res.get("status"):
+            return res
+        out = empty_seed_result(seed, "crash", "evaluator infrastructure error (remote lane)")
+        out["infra"].append(f"remote lane {ls.lane} (job {ls.cfg.jobid}) step failed: rc={r['rc']} "
+                            f"killed={r['killed_reason']}; see {logp}")
         return out
 
     # ------------------------------------------------------------ eval data
@@ -725,14 +460,14 @@ class EvalService:
         """Tokenize + pack an eval split once (trusted code only), cached on node-local scratch."""
         cfg = self.cfg
         with self._prep_lock:
-            path = os.path.join(cfg.scratch_dir, "cache",
+            path = os.path.join(cfg.state_dir, "cache",
                                 f"{split}_T{cfg.seq_len}_R{cfg.eval_rows}_{self._fingerprint(split)}.pt")
             if os.path.isfile(path):
                 return path
-            pd = os.path.join(cfg.scratch_dir, "cache", f"prep_{split}_{uuid.uuid4().hex[:6]}")
+            pd = os.path.join(cfg.scratch_dir, f"prep_{split}_{uuid.uuid4().hex[:6]}")
             os.makedirs(os.path.join(pd, "out"), exist_ok=True)
             fifo = FifoReader(os.path.join(pd, "audit.fifo")).start()
-            mounts = self._env_mount() + [
+            mounts = self.runner._env_mount() + [
                 Mount(SCORER_DIR, "/opt/rsi/scorer", "ro"),
                 Mount(GUARD_DIR, "/opt/rsi/guard", "ro"),
                 Mount(cfg.split_dir(split), "/in/data", "ro"),
@@ -743,7 +478,7 @@ class EvalService:
             if cfg.sandbox == "bwrap":
                 mounts.append(Mount(None, "/tmp", "tmpfs"))
             tmp_in = "/tmp" if cfg.sandbox == "bwrap" else os.path.join(pd, "out")
-            env = self._env_common(None, tmp_in)
+            env = self.runner._env_common(None, tmp_in)
             env.update({"HOME": tmp_in, "PYTHONPATH": "/opt/rsi/guard", "RSI_AUDIT_PIPE": "/opt/rsi/chan/audit.fifo",
                         "RSI_GUARD_ROLE": "prepare", "RSI_GUARD_DENY": ""})
             argv = [cfg.train_python, "-u", "/opt/rsi/scorer/scorer.py", "prepare", "--data", "/in/data",

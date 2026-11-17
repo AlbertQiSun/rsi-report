@@ -184,7 +184,8 @@ def test_good_artifact_scores_and_strips_sealed(svc, tmp_path):
     assert "sealed" not in open(evp).read()
     # sealed numbers do go to the private sealed logs
     sl = [json.loads(l) for l in open(os.path.join(svc.cfg.runs_root, "test-run", "sealed.jsonl"))]
-    assert any(r["job_id"] == res["job_id"] and r["sealed"] == res["sealed"]["value"] for r in sl)
+    assert any(r["job_id"] == res["job_id"] and r["value"] == res["sealed"]["value"]
+               and r["artifact_hash"] == res["artifact_hash"] for r in sl)
 
 
 def test_seed_changes_result(svc, tmp_path):
@@ -524,3 +525,62 @@ def test_run_seeds_csv(svc, tmp_path, capsys):
     lines = out.read_text().strip().splitlines()
     assert lines[0].split(",") == CSV_COLS and len(lines) == 3
     assert all(r["status"] == "ok" and r["dev_bpb"] and r["sealed_bpb"] for r in rows)
+
+
+# ---------------------------------------------------------------------------
+# remote lanes (another Slurm job): srun launch path with a fake srun
+# ---------------------------------------------------------------------------
+
+def test_parse_lanes_and_srun_argv():
+    from rsi.evald.config import parse_lanes
+    from rsi.evald.sandbox import clean_slurm_env, srun_argv
+
+    ls = parse_lanes("1,2,3-5@10000002:node-b,6:cpu")
+    assert [(l.lane, l.gpu, l.jobid, l.node) for l in ls] == [
+        (1, 1, None, None), (2, 2, None, None), (3, "slurm", "10000002", "node-b"),
+        (4, "slurm", "10000002", "node-b"), (5, "slurm", "10000002", "node-b"), (6, None, None, None)]
+    a = srun_argv(ls[2])
+    assert a[:5] == ["srun", "--jobid=10000002", "--overlap", "--ntasks=1", "--nodes=1"]
+    assert "--nodelist=node-b" in a and "--gres=gpu:a100:1" in a and "--cpu-bind=none" in a
+    assert "--mem=60G" in a and "--cpus-per-task=6" in a
+    env = clean_slurm_env({"SLURM_JOB_ID": "1", "SLURM_CONF": "/etc/slurm.conf", "SRUN_CPUS_PER_TASK": "4",
+                           "PATH": "/bin"})
+    assert env == {"SLURM_CONF": "/etc/slurm.conf", "PATH": "/bin"}
+
+
+FAKE_SRUN = """#!/bin/sh
+# fake srun: refuse an env with SLURM_* (other than SLURM_CONF), log args, drop --options, exec the rest
+env | grep -q '^SLURM_TESTVAR=' && { echo 'SLURM_* leaked' >&2; exit 3; }
+[ -n "$SLURM_CONF" ] || { echo 'SLURM_CONF missing' >&2; exit 4; }
+echo "$@" >> "$(dirname "$0")/srun_args.log"
+while [ $# -gt 0 ]; do case "$1" in --*) shift;; *) break;; esac; done
+exec "$@"
+"""
+
+
+def test_remote_lane_via_srun(tmp_path, data_root, monkeypatch):
+    srun = tmp_path / "bin" / "srun"
+    srun.parent.mkdir()
+    srun.write_text(FAKE_SRUN)
+    srun.chmod(0o755)
+    monkeypatch.setenv("SLURM_TESTVAR", "from-the-evald-step")
+    monkeypatch.setenv("SLURM_CONF", "/etc/slurm/slurm.conf")
+    lane = LaneCfg(3, None, jobid="10000002", node="node-b", srun=str(srun))
+    s = EvalService(make_cfg(str(tmp_path / "e"), data_root, lanes=[lane])).start()
+    try:
+        info = s.lanes_info()[0]
+        assert info["remote"] and info["jobid"] == "10000002"
+        jid = s.submit("test-remote", "nanochat", make_artifact(str(tmp_path / "ra")), seeds=[0])
+        res = s.result(jid, wait=True, timeout_s=300)
+        assert res["status"] == "ok", (res.get("error"), res.get("infra_notes"), res.get("log_tail"))
+        assert res["sealed"]["value"] is not None and res["lane"] == 3
+        assert any("node=" in n for n in res.get("infra_notes", []))
+        args = (srun.parent / "srun_args.log").read_text()
+        assert "--jobid=10000002" in args and "--nodelist=node-b" in args and "rsi.evald.seed_runner" in args
+        # a broken step is an infra crash, not a hang
+        srun.write_text("#!/bin/sh\nexit 1\n")
+        res2 = s.result(s.submit("test-remote", "nanochat", str(tmp_path / "ra"), seeds=[1]), wait=True,
+                        timeout_s=120)
+        assert res2["status"] == "crash" and "remote lane" in res2["error"]
+    finally:
+        s.stop()

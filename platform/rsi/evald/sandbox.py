@@ -80,6 +80,74 @@ def gpu_compute_pids(uuid: str, nvidia_smi: str = "nvidia-smi") -> list[int]:
     return pids
 
 
+def all_gpus(nvidia_smi: str = "nvidia-smi") -> list[GpuInfo]:
+    """Every GPU nvidia-smi can see, with index, UUID, PCI bus id and /dev minor number."""
+    out = subprocess.run([nvidia_smi, "--query-gpu=index,uuid,pci.bus_id", "--format=csv,noheader"],
+                         capture_output=True, text=True, check=True, timeout=60).stdout
+    by_uuid = {}
+    for line in out.strip().splitlines():
+        parts = [p.strip() for p in line.split(",")]
+        if len(parts) >= 3 and parts[0].isdigit():
+            by_uuid[parts[1]] = (int(parts[0]), parts[2])
+    q = subprocess.run([nvidia_smi, "-q"], capture_output=True, text=True, check=True, timeout=60).stdout
+    gpus = []
+    for block in re.split(r"\n(?=GPU [0-9A-Fa-f]{4,8}:)", q):
+        mu = re.search(r"GPU UUID\s*:\s*(\S+)", block)
+        mm = re.search(r"Minor Number\s*:\s*(\d+)", block)
+        if mu and mm and mu.group(1) in by_uuid:
+            idx, bus = by_uuid[mu.group(1)]
+            gpus.append(GpuInfo(index=idx, uuid=mu.group(1), minor=int(mm.group(1)), bus_id=bus))
+    return sorted(gpus, key=lambda g: g.index)
+
+
+def _dev_accessible(path: str) -> bool:
+    try:
+        fd = os.open(path, os.O_RDWR)
+    except OSError:
+        return False
+    os.close(fd)
+    return True
+
+
+def resolve_slurm_gpu(nvidia_smi: str = "nvidia-smi") -> tuple[GpuInfo, str]:
+    """The single GPU this Slurm step was given (--gres=gpu:1).
+
+    Primary signal: which /dev/nvidiaN the step's device cgroup lets us open. Fallback:
+    nvidia-smi sees exactly one GPU. Raises if ambiguous (then run the selftest)."""
+    gpus = all_gpus(nvidia_smi)
+    ok = [g for g in gpus if _dev_accessible(f"/dev/nvidia{g.minor}")]
+    if len(ok) == 1:
+        return ok[0], "device-cgroup"
+    if len(gpus) == 1:
+        return gpus[0], "only-visible-gpu"
+    raise RuntimeError(f"cannot tell which GPU this Slurm step owns: {len(ok)} of {len(gpus)} device nodes "
+                       f"accessible (SLURM_STEP_GPUS={os.environ.get('SLURM_STEP_GPUS')!r}, "
+                       f"CUDA_VISIBLE_DEVICES={os.environ.get('CUDA_VISIBLE_DEVICES')!r})")
+
+
+def clean_slurm_env(base: dict | None = None) -> dict:
+    """Env for launching ``srun`` into another job from inside a step: drop SLURM_* (except
+    SLURM_CONF) and the SRUN_/SBATCH_/SALLOC_ input variables, which otherwise make srun
+    inherit this step's memory/cpu-bind settings."""
+    env = dict(os.environ if base is None else base)
+    for k in list(env):
+        if (k.startswith("SLURM_") and k != "SLURM_CONF") or k.startswith(("SRUN_", "SBATCH_", "SALLOC_")):
+            del env[k]
+    return env
+
+
+def srun_argv(lane, cfg=None) -> list[str]:
+    """``srun`` prefix for a remote lane (LaneCfg with jobid)."""
+    from rsi.evald.config import DEFAULT_REMOTE_SRUN_ARGS
+
+    a = [lane.srun, f"--jobid={lane.jobid}", "--overlap", "--ntasks=1", "--nodes=1"]
+    if lane.node:
+        a.append(f"--nodelist={lane.node}")
+    a += list(lane.srun_args if lane.srun_args is not None else DEFAULT_REMOTE_SRUN_ARGS)
+    a.append(f"--job-name=rsi-evald-lane{lane.lane}")
+    return a
+
+
 # ---------------------------------------------------------------------------
 # Launchers
 # ---------------------------------------------------------------------------

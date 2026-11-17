@@ -28,7 +28,7 @@ def test_bwrap_argv_hides_sealed_and_ssh(tmp_path):
     td = f"{R}/runs/r1/threads/thread-0"
     spec = SandboxSpec(workspace=f"{td}/workspace", lab=str(tmp_path / "lab"), home=f"{td}/home",
                        config_dir=f"{td}/episode_conf",
-                       ro_paths=["/scratch/user/miniconda3/envs/rsi", f"{R}/code/rsi-mini", f"{R}/tools/opencode"],
+                       ro_paths=["/scratch/user/miniconda3/envs/rsi", f"{R}/platform", f"{R}/tools/opencode"],
                        forbidden=_forbidden(), env={"X": "1"})
     argv = bwrap_argv(spec, ["opencode", "run"])
     srcs = [s for s, _ in _binds(argv)]
@@ -51,7 +51,7 @@ def test_check_binds_rejects(bad):
 
 def test_check_binds_allows_thread_dirs_and_tools():
     ws = f"{R}/runs/r1/threads/thread-0/workspace"
-    check_binds([ws, f"{R}/envs/mcp", f"{R}/code/rsi-mini"], _forbidden(), allowed_inside=[ws])
+    check_binds([ws, f"{R}/envs/mcp", f"{R}/platform"], _forbidden(), allowed_inside=[ws])
 
 
 def _rpc(lab, msgs):

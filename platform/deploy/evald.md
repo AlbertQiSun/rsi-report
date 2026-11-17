@@ -1,7 +1,7 @@
 # evald + NanoChat task: cluster deployment (island mode, <node>)
 
 Owner: worker B. Untested on the cluster; everything below was tested on Mac CPU with
-`sandbox=none` only (`tests/test_evald.py`, 23 tests). Step 2 (selftest) is the first real
+`sandbox=none` only (`tests/test_evald.py`, 25 tests, including remote lanes through a fake `srun`). Step 2 (selftest) is the first real
 check of the bwrap sandbox and must pass before anything else runs.
 
 ```bash
@@ -9,7 +9,30 @@ export R=$R
 export PY=$SCRATCH/miniconda3/envs/rsi/bin/python   # evald host code is stdlib only
 P=$R/platform                                                     # where the platform repo was pushed
 J="srun --jobid=<jobid> --overlap --ntasks=1 -N1"
+LANES="1,2,3-5@<jobid>:<node>"     # 1,2 = GPU1,GPU2 of <node>; 3,4,5 = job <jobid> on <node>
 ```
+
+Lanes (5): lanes 1 and 2 are local GPUs of <node> (job <jobid>, where evald runs).
+Lanes 3, 4 and 5 are remote: each seed of a job on those lanes runs as a job step of
+job <jobid> (<node>, 3x A100, 24 CPU, 240G, valid for 2 days), launched by evald as
+```
+env -u SLURM_* (all except SLURM_CONF; also SRUN_*/SBATCH_*/SALLOC_*) \
+srun --jobid=<jobid> --overlap --ntasks=1 --nodes=1 --nodelist=<node> --cpus-per-task=6 \
+     --mem=60G --gres=gpu:a100:1 --cpu-bind=none --job-name=rsi-evald-laneN \
+     $PY -m rsi.evald.seed_runner $R/evald/jobs/<id>/remote_s<seed>.json .../seed_s<seed>.json
+```
+The seed runner (trusted evald code, outside the sandbox) runs the whole per-seed pipeline
+on <node>: node-local `/tmp` scratch, guard FIFO, honeypots, bwrap training sandbox, both
+scoring sandboxes, all on the GPU Slurm gave the step. It finds that GPU by which
+`/dev/nvidiaN` the step's device cgroup can open (fallback: the only GPU nvidia-smi sees),
+waits up to 600 s for it to have no compute processes, and writes the seed result to the
+private state dir on cluster FS. evald kills the step if it exceeds
+`wall limit + 2 x score timeout + GPU wait + 300 s`; a failed step is a `crash` with an infra
+note (`remote_s<seed>.log`). Lane syntax: `N` (local GPU N), `N:G` (lane N on local GPU G),
+`A-B@JOBID[:NODE]` (remote). A JSON config (`--config`) can set per-lane `srun_args`.
+The platform tree (`$P`), `$PY`, the training env, `$R/data` and `$R/evald` must all be on cluster FS
+(they are), so both nodes see the same paths. When job <jobid> expires, restart evald with
+`--lanes 1,2`; queued jobs re-queue onto the remaining lanes.
 
 Paths used: training env `$R/envs/rsi-train`, data `$R/data/{train,devval,sealed}`,
 tokenizer `$R/data/tokenizer`, private state `$R/evald` (jobs, logs, `sealed.jsonl`),
@@ -22,16 +45,22 @@ Karpathy's `prepare.py` on the 10 train shards (no downloads; sealed shards neve
 $J -c 8 bash $P/rsi/tasks/nanochat/prepare_data.sh 2>&1 | tee $R/out/prepare_data.log
 ```
 
-## 2. Sandbox selftest (must print `"ok": true`)
+## 2. Sandbox selftest (must print `"ok": true`, once per node)
 ```bash
-$J -c 8 --gres=gpu:a100:3 bash -c "cd $P && $PY -m rsi.evald selftest --R $R --gpu 1 --smoke" \
-  2>&1 | tee $R/out/evald_selftest.log
+# local node <node>, GPU1
+$J -c 8 --gres=gpu:a100:3 bash -c "cd $P && $PY -m rsi.evald selftest --R $R --lanes $LANES --lane 1 --smoke" \
+  2>&1 | tee $R/out/evald_selftest_4036.log
+# remote node <node>, through exactly the srun path evald uses for lanes 3-5
+$J -c 2 bash -c "cd $P && $PY -m rsi.evald selftest --R $R --lanes $LANES --lane 3 --smoke" \
+  2>&1 | tee $R/out/evald_selftest_4018.log
 ```
+The remote run also reports `node` and `gpu_resolved` (index, uuid, minor, how it was found);
+if GPU resolution fails there, evald cannot use lanes 3-5.
 Checks: one CUDA device visible in the sandbox, CUDA matmul works, no network, no writes
 outside `/work` and `/tmp`, devval/sealed/`~/.ssh`/otherproj show only 64-byte decoys,
 `$R/evald` and `$R/run` are absent, a deliberate decoy open is reported by both the guard and
-the inotify honeypot. Then it packs the dev and sealed eval rows (cached in
-`/tmp/rsi-evald-$USER/cache`), and `--smoke` trains the vanilla start for 30 s and scores it.
+the inotify honeypot. Then it packs the dev and sealed eval rows (cached on cluster FS in
+`$R/evald/cache`, readable by both nodes, private), and `--smoke` trains the vanilla start for 30 s and scores it.
 
 If `--gres` is rejected for an overlapping step, drop it and check `nvidia-smi -L` inside the
 step shows all three GPUs. If CUDA fails in the sandbox because only one `/dev/nvidiaN` node is
@@ -40,10 +69,13 @@ bound, look at `bwrap_argv_head` in the report; the sandbox also sets
 config file (`extra_ro_binds`, see §6).
 
 ## 3. Noise floor S0 (gate G1a), before evald is started
-20 seeds of the vanilla start, 10 per lane (GPU1, GPU2), in-process (direct mode) with a
-generous startup margin (600 s) so no seed is killed while startup time is measured:
+20 seeds of the vanilla start, in-process (direct mode) with a generous startup margin
+(600 s) so no seed is killed while startup time is measured. On the two local lanes (plan
+§6.4, same node), or on all five lanes (faster, but mixes two nodes; the summary reports
+dev BPB per lane so node effects are visible):
 ```bash
 tmux new -d -s rsi-noise "$J -c 24 --gres=gpu:a100:3 bash $P/bundle/noise_floor.sh 20 1,2 2>&1 | tee $R/out/noise_floor.log"
+# or: ... bash $P/bundle/noise_floor.sh 20 "$LANES" ...
 ```
 Output: `$R/out/noise_floor_<ts>.csv` (one line per seed: seed, lane, status, dev_bpb,
 sealed_bpb, wall_s, train_wall_s, score_wall_s, reported_training_s, reported_total_s,
@@ -58,7 +90,7 @@ evald, else direct; MODE=direct refuses to run while evald is up).
 
 ## 4. Start evald
 ```bash
-tmux new -d -s rsi-evald "$J -c 24 --gres=gpu:a100:3 bash $P/rsi/evald/start_evald.sh 1,2 --margin-s <M> 2>&1 | tee -a $R/out/evald.log"
+tmux new -d -s rsi-evald "$J -c 24 --gres=gpu:a100:3 bash $P/rsi/evald/start_evald.sh $LANES --margin-s <M> 2>&1 | tee -a $R/out/evald.log"
 ```
 `start_evald.sh` creates `$R/run/token` (600) if missing, binds 127.0.0.1 on a random port,
 writes `$R/run/ports.json`. Health and lanes (token read from the file, never on argv):
@@ -66,7 +98,9 @@ writes `$R/run/ports.json`. Health and lanes (token read from the file, never on
 cd $P && $PY -c "from rsi.evald.client import EvalClient as C; c=C.from_run_dir('$R/run'); print(c.health(), c.lanes())"
 ```
 Pause/resume a lane around LoRA training (F): `c.pause_lane(2)` (blocks until the running job
-on lane 2 finishes) ... `c.resume_lane(2)`. Restarting evald re-queues unfinished jobs;
+on lane 2 finishes) ... `c.resume_lane(2)`. Works the same for remote lanes. Jobs submitted
+without a lane go to the least loaded unpaused lane; an idle lane takes queued auto-assigned
+jobs from a busy or paused one. Restarting evald re-queues unfinished jobs;
 pause state persists in `$R/evald/lanes.json`.
 
 ## 5. What happens per job (design)
@@ -99,17 +133,22 @@ pause state persists in `$R/evald/lanes.json`.
    after t, logits up to t must not move); batch-independence probe; parameter/buffer hash
    before vs after; re-scoring two batches in reverse order; canary re-computation of the loss
    after the model was imported; non-finite -> `nan`.
-6. The dev number is `value`. The sealed number goes only to the result's `sealed` field (for
-   the orchestrator's private ledger) and to `$R/evald/sealed.jsonl` and
-   `$R/runs/<run>/sealed.jsonl`; never to `events.jsonl` or `visible_feedback`. Flags raised
+6. The dev number is `value`. The sealed number goes only to the result's `sealed` field
+   (`result["sealed"]["value"]`, for orchestrator-side policies and the private ledger) and to
+   `$R/evald/sealed.jsonl` and `$R/runs/<run>/sealed.jsonl` (mode 600; one line per job with
+   `job_id, artifact_hash, value` = sealed val_bpb, plus `dev`, `status`, per-seed values);
+   never to `events.jsonl` or `visible_feedback`. The improver sandbox must not mount these. Flags raised
    during sealed scoring appear to the improver only as `hidden_check_failed`.
 7. Events (via `rsi.events.emit`, agent `evald`): `eval_submit`, `eval_result`, `audit_flag`
    (one per flag; sealed-side flags as `hidden:<check>` with no detail).
 
 Eval data: dev = shard 06542 and sealed = shards 06540+06541, each packed into
 `40*524288 // 2048 = 10240` rows of 2049 tokens with the original best-fit packing
-(`scorer.pack_rows`, tested equal to the original loop), once per evald node, by trusted
-code only.
+(`scorer.pack_rows`, tested equal to the original loop), once, by trusted code only, on the
+evald node; cached in `$R/evald/cache` (private, cluster FS) and bind-mounted read-only into the
+scoring sandboxes of both nodes.
+
+evald serves only the `nanochat*` task family; µAR uses worker D's in-process LocalEvalClient.
 
 ## 6. Configuration
 Defaults come from `EvaldConfig.for_cluster` (`rsi/evald/config.py`). Override with
@@ -136,6 +175,9 @@ Useful fields: `score_batch` (32), `score_timeout_s` (1200), `max_ckpt_bytes`,
 - Tokenizer: Karpathy's `prepare.py` on train shards 0 to 9 (same procedure as upstream).
 
 ## 8. Residual risks (not solved)
+- Remote lanes: with `--overlap`, it is not verified that Slurm never hands the same GPU to
+  two overlapping steps; the seed runner waits for the GPU to be free of compute processes
+  (up to 600 s) and records an infra note if it was not.
 - Same Unix user inside and outside bwrap; the sandbox is not a security boundary against
   kernel or bwrap bugs.
 - The scorer runs submitted model code in its own process, so code with native access could

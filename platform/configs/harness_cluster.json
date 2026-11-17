@@ -6,14 +6,14 @@
   "gateway_ports_key": "gateway_agent",
   "api_key_file": "${R}/run/agent_token",
   "python": "/scratch/user/miniconda3/envs/rsi/bin/python",
-  "platform_dir": "${R}/code/rsi-mini",
+  "platform_dir": "${R}/platform",
   "ddg_cmd": ["${R}/envs/mcp/bin/duckduckgo-mcp-server"],
   "fetch_cmd": ["${R}/envs/mcp/bin/mcp-server-fetch"],
   "ro_paths": [
     "/scratch/user/miniconda3/envs/rsi",
     "${R}/envs/mcp",
     "${R}/envs/rsi-train",
-    "${R}/code/rsi-mini",
+    "${R}/platform",
     "${R}/tools/opencode"
   ],
   "sandbox_path": "${R}/envs/rsi-train/bin:/usr/local/bin:/usr/bin:/bin",

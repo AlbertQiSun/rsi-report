@@ -89,7 +89,7 @@ def test_plan_fits_hold_window():
     cfg = load_config(CONFIG, root_override="/tmp/x")
     tz = cfg["_tz"]
     assert cfg["_gpu_stop"] <= cfg["_hold_end"] - 1.5 * 3600, "need ≥1.5 h between gpu_stop and hold end"
-    assert cfg["_planned_start"] == parse_time("2026-11-18T01:00", tz)
+    assert cfg["_planned_start"] == parse_time("2026-11-17T22:45", tz)
     steps = {s["id"]: s for s in cfg["steps"]}
     for s in cfg["steps"]:
         if s["_deadline"] is not None:
@@ -101,13 +101,21 @@ def test_plan_fits_hold_window():
             assert s["holds"] == ["gpu2"] and int(s.get("lane", 2)) == 2
     assert steps["ladder_nc"]["after"] == steps["nc_g0"]["after"], "27B ladder starts with G0"
     assert "gpu2" not in steps["ladder_nc"]["holds"]
+    # the LoRA lane is not one the 9B G0 (or the ladder) depends on; G0 uses three dedicated lanes
+    lora_lane = cfg["lora_lane"]
+    assert lora_lane not in steps["nc_g0"]["run"]["lanes"] and lora_lane not in steps["ladder_nc"]["run"]["lanes"]
+    assert len(steps["nc_g0"]["run"]["lanes"]) == 3 and set(cfg["lanes"]) == {1, 2, 3, 4, 5}
+    # no two NanoChat runs that can overlap in time are pinned to the same lane (checked via after-chains)
+    for s in cfg["steps"]:
+        if s["kind"] == "run" and s["id"] not in ("nc_g0", "ladder_nc"):
+            assert s.get("after") or s.get("needs"), s["id"]
     assert "!ladder27b_remote" in steps["ladder_fb_host"]["requires_flags"]
     # NanoChat eval budget stays well under the ≈750-eval lane capacity estimate (plan §6.5)
     n_eval = 20 + sum(int(s.get("stop_when_trials") or 0) for s in cfg["steps"]
                       if s["kind"] == "run" and not s["id"].startswith("ladder_fb"))
     ep = steps["endpoint"]
     n_eval += (ep["top_k"] + 1) * len(ep["seeds"])
-    assert n_eval <= 600, n_eval
+    assert n_eval <= 0.6 * 5 * 8.5 * 42, n_eval   # ≤ 60% of the 5-lane capacity estimate
     # held-out arms share seeds with A0a; A/A seeds are disjoint
     mu = cfg["muar"]["seeds"]
     assert not set(mu["heldout"]) & set(mu["aa"])
@@ -140,7 +148,8 @@ def test_full_campaign_dry_run(tmp_path):
     must = ["g1a_noise", "g1b_toolcall", "g1b_27b", "g1c_evald", "g2_muar_smoke", "nc_g0", "ladder_nc", "mu_g0",
             "mu_a0a", "mu_a0b", "us_lessons_mu", "mu_a1", "mu_a1p", "dec_us", "sft_m1", "sft_m1p", "lora_g1",
             "mu_a2", "mu_a2p", "dec_g1", "lora_g2", "mu_a3", "mu_a3c", "dec_g2", "us_lessons_nc", "cf_m0_r1",
-            "cf_s1_r1", "cf_m1_r1", "cf_m1p_r1", "pol_recursive", "endpoint"]
+            "cf_s1_r1", "cf_m1_r1", "cf_m1p_r1", "cf_m0_r2", "cf_s1_r2", "cf_m1_r2", "cf_m1p_r2",
+            "pol_recursive", "pol_naive", "nc_weboff", "endpoint"]
     bad = {k: (S[k]["status"], S[k].get("reason")) for k in must if S[k]["status"] != "done"}
     assert not bad, bad
     for k, v in S.items():  # whatever was skipped was skipped for a stated reason
@@ -151,8 +160,8 @@ def test_full_campaign_dry_run(tmp_path):
 
     # trial-count trigger: G0 stopped at 2×30 trials, and the CFF arms started only after it ended
     runs = os.path.join(tmp_path, "runs")
-    assert analysis.run_stats(os.path.join(runs, "ovn1118-nc-g0", "events.jsonl"))["n_trials"] == 60
-    for cf in ("cf_m0_r1", "cf_s1_r1"):
+    assert analysis.run_stats(os.path.join(runs, "ovn1118-nc-g0", "events.jsonl"))["n_trials"] == 90
+    for cf in ("cf_m0_r1", "cf_s1_r1", "cf_m1_r1"):
         assert S[cf]["t_start"] >= S["nc_g0"]["t_end"]
         assert analysis.run_stats(os.path.join(runs, f"ovn1118-{cf.replace('_', '-')}", "events.jsonl"))["n_trials"] == 12
     # ladder ran in parallel with G0 (own node), not after it
@@ -190,7 +199,7 @@ def test_full_campaign_dry_run(tmp_path):
 # ---------------------------------------------------------------------------
 
 def test_resume_after_crash(tmp_path):
-    p = subprocess.Popen(cmd(tmp_path, "--until", "2026-11-18T09:30", scale=2500), cwd=PLATFORM,
+    p = subprocess.Popen(cmd(tmp_path, "--until", "2026-11-18T05:00", scale=2500), cwd=PLATFORM,
                          env=env(RSI_FAKE_CRASH="nc-g0"), stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
     try:
         assert wait_for(lambda: state(tmp_path)["steps"]["lora_g1"].get("stage") == "train", timeout=120)
@@ -201,7 +210,7 @@ def test_resume_after_crash(tmp_path):
             p.kill()
     before = state(tmp_path)
     assert before["paused_lanes"].get("2") == "lora_g1"
-    r = run(tmp_path, "--resume", "--until", "2026-11-18T09:30", scale=2500, RSI_FAKE_CRASH="nc-g0")
+    r = run(tmp_path, "--resume", "--until", "2026-11-18T05:00", scale=2500, RSI_FAKE_CRASH="nc-g0")
     assert r.returncode == 0, r.stderr[-2000:]
     st = state(tmp_path)
     S = st["steps"]
@@ -223,7 +232,7 @@ def test_resume_after_crash(tmp_path):
 # ---------------------------------------------------------------------------
 
 def test_stop_file_and_resume(tmp_path):
-    p = subprocess.Popen(cmd(tmp_path, "--until", "2026-11-18T07:00", scale=2500), cwd=PLATFORM, env=env(),
+    p = subprocess.Popen(cmd(tmp_path, "--until", "2026-11-18T04:00", scale=2500), cwd=PLATFORM, env=env(),
                          stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
     try:
         assert wait_for(lambda: state(tmp_path)["steps"]["lora_g1"].get("stage") == "train", timeout=120)
@@ -236,16 +245,17 @@ def test_stop_file_and_resume(tmp_path):
     st = state(tmp_path)
     assert not st.get("ended")
     assert st["steps"]["lora_g1"]["status"] == "interrupted"
-    assert st["steps"]["nc_g0"]["status"] == "interrupted"
+    assert not [k for k, v in st["steps"].items() if v["status"] == "running"]
+    assert st["steps"]["nc_g0"]["status"] in ("interrupted", "pending")  # µAR/LoRA do not wait for G1a
     assert not st["paused_lanes"] and not any(v["paused"] for v in lanes_json(tmp_path).values())
     assert wait_for(lambda: no_live_children(tmp_path), timeout=20)
     md = open(os.path.join(tmp_path, "runs", "campaign_status.md")).read()
     assert "campaign STOPPED" in md
     # refuses to resume while STOP exists
-    r = run(tmp_path, "--resume", "--until", "2026-11-18T07:00", scale=2500)
+    r = run(tmp_path, "--resume", "--until", "2026-11-18T04:00", scale=2500)
     assert r.returncode == 2
     os.remove(os.path.join(tmp_path, CAMP, "STOP"))
-    r = run(tmp_path, "--resume", "--until", "2026-11-18T07:00", scale=2500)
+    r = run(tmp_path, "--resume", "--until", "2026-11-18T04:00", scale=2500)
     assert r.returncode == 0, r.stderr[-2000:]
     S = state(tmp_path)["steps"]
     assert S["lora_g1"]["status"] == "done"
@@ -260,7 +270,7 @@ def test_stop_file_and_resume(tmp_path):
 # ---------------------------------------------------------------------------
 
 def test_gate_fail_fallback(tmp_path):
-    r = run(tmp_path, "--until", "2026-11-18T05:00", scale=2500, RSI_FAKE_GATE_FAIL="g1b_toolcall,g1b_27b")
+    r = run(tmp_path, "--until", "2026-11-18T01:30", scale=2500, RSI_FAKE_GATE_FAIL="g1b_toolcall,g1b_27b")
     assert r.returncode == 0, r.stderr[-2000:]
     st = state(tmp_path)
     S = st["steps"]
@@ -274,7 +284,7 @@ def test_gate_fail_fallback(tmp_path):
 
 
 def test_human_override_force_pass(tmp_path):
-    p = subprocess.Popen(cmd(tmp_path, "--until", "2026-11-18T03:30", scale=1500), cwd=PLATFORM,
+    p = subprocess.Popen(cmd(tmp_path, "--until", "2026-11-18T00:45", scale=1500), cwd=PLATFORM,
                          env=env(RSI_FAKE_GATE_FAIL="g1c_evald"), stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
     try:
         assert wait_for(lambda: state(tmp_path)["steps"]["g1c_evald"]["status"] == "waiting_human", timeout=60)
@@ -288,3 +298,52 @@ def test_human_override_force_pass(tmp_path):
     assert st["steps"]["g1c_evald"]["status"] == "done"
     assert st["flags"]["nanochat"] is True
     assert st["steps"]["nc_g0"]["status"] in ("running", "partial", "done")
+
+
+# ---------------------------------------------------------------------------
+# glue to other workers' interfaces
+# ---------------------------------------------------------------------------
+
+def test_runner_captures_multiline_json(tmp_path):
+    from rsi.campaign.runner import main as runner_main
+
+    script = tmp_path / "s.py"
+    script.write_text("import json; print('noise'); print(json.dumps({'dev_bpb': {'sd': 0.01}, 'n': 3}, indent=1))\n")
+    res = tmp_path / "r.json"
+    runner_main(["--result", str(res), "--log", str(tmp_path / "l.txt"), "--", sys.executable, str(script)])
+    out = json.load(open(res))
+    assert out["rc"] == 0 and out["out"]["dev_bpb"]["sd"] == 0.01
+    from rsi.campaign.config import run_checks
+    assert run_checks(out["out"], {"dev_bpb.sd": "<= 0.02", "n": ">= 3"})[0]
+
+
+def test_ports_resolution(tmp_path):
+    from rsi.campaign.services import Ports
+
+    p = tmp_path / "ports.json"
+    p.write_text(json.dumps({"gateway": 18000, "evald": "http://127.0.0.1:18100", "vllm_improver": {"port": 18200}}))
+    ports = Ports(str(p))
+    assert ports.url("gateway") == "http://127.0.0.1:18000" and ports.get("gateway") == "18000"
+    assert ports.url("evald") == "http://127.0.0.1:18100" and ports.url("vllm_improver").endswith(":18200")
+    assert "no-port" in ports.url("missing")
+
+
+def test_decision_action_uses_worker_d_analysis(tmp_path):
+    pytest.importorskip("numpy")
+    from rsi.campaign.actions import do_decision
+
+    tasks = [f"muar/t{j}" for j in range(6)]
+    def curves(shift):
+        return {t: {str(s): [1.0 - shift - 0.01 * i for i in range(12)] for s in range(4)} for t in tasks}
+    arms = {"arms": {"A": curves(0.0), "B": curves(0.2), "AA": curves(0.0), "P": curves(0.05)}}
+    (tmp_path / "arms.json").write_text(json.dumps(arms))
+    (tmp_path / "sref.json").write_text(json.dumps({t: {"s_ref": 0.0, "s0": 1.2} for t in tasks}))
+    f = str(tmp_path / "arms.json")
+    spec = {"sref_path": str(tmp_path / "sref.json"), "runs": {},
+            "arms_files": {k: [f, k] for k in ("A", "B", "AA", "P")}, "aa": ["A", "AA"],
+            "compare": [["B", "A", "P"], ["B", "AA"]], "names": ["B vs AA"], "n_trials": 12, "n_boot": 500,
+            "floor": "per_task"}
+    res = do_decision(spec)
+    assert res["main"]["delta"] > 0 and res["also"][0]["name"] == "B vs AA"
+    assert set(res["criteria"]) >= {"ci_lower_gt_0", "gt_2x_aa", "beats_placebo"}
+    assert do_decision({**spec, "arms_files": {}})["nodata"]

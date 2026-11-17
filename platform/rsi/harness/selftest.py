@@ -31,7 +31,7 @@ def _cfg(path: str) -> dict:
     return cfg
 
 
-def probes(R: str, real_home: str) -> list[tuple[str, str, bool]]:
+def probes(R: str, real_home: str, platform_dir: str | None = None) -> list[tuple[str, str, bool]]:
     """(name, shell command, must_succeed)."""
     return [
         ("write workspace", "echo ok > /work/probe.txt && cat /work/probe.txt", True),
@@ -49,7 +49,7 @@ def probes(R: str, real_home: str) -> list[tuple[str, str, bool]]:
         ("read other project", "ls /scratch/user/ | grep -i otherproj", False),
         ("write lab (ro)", "echo x > /lab/card.md", False),
         ("write system", "echo x > /usr/probe", False),
-        ("write code", f"touch {R}/code/rsi-mini/probe", False),
+        ("write code", f"touch {platform_dir or R + '/platform'}/probe", False),
     ]
 
 
@@ -65,7 +65,7 @@ def cmd_sandbox(cfg: dict) -> int:
                        ro_paths=list(cfg.get("ro_paths", [])), share_net=True,
                        env={"PATH": cfg.get("sandbox_path", "/usr/local/bin:/usr/bin:/bin")})
     bad = 0
-    for name, sh, must in probes(R, real_home):
+    for name, sh, must in probes(R, real_home, cfg.get("platform_dir")):
         argv, env, cwd = wrap(spec, ["/bin/bash", "-c", sh], cfg.get("sandbox", "bwrap"))
         try:
             r = subprocess.run(argv, env=env, cwd=cwd, capture_output=True, text=True, timeout=60)
