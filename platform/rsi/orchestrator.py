@@ -104,6 +104,18 @@ def service_url(name: str, ports_file: str | None = None) -> str:
     return v if str(v).startswith("http") else f"http://{v}"
 
 
+def agent_gateway_url(h: dict) -> str:
+    """Gateway for sandboxed agents: ports.json key ``gateway_agent`` (a gateway instance whose only inbound
+    token is $R/run/agent_token), falling back to ``gateway`` only if ``allow_main_gateway`` is set."""
+    key = h.get("gateway_ports_key", "gateway_agent")
+    try:
+        return service_url(key, h.get("ports_file"))
+    except SystemExit:
+        if h.get("allow_main_gateway"):
+            return service_url("gateway", h.get("ports_file"))
+        raise
+
+
 def make_evald(cfg: dict):
     e = dict(cfg.get("evald") or {})
     if e.get("factory"):  # "module:callable" (tests, alternative backends)
@@ -120,7 +132,7 @@ def make_harness(cfg: dict, runs_root: str, run: str):
 
     h = dict(cfg.get("harness") or {})
     if not h.get("gateway_url"):
-        h["gateway_url"] = service_url("gateway", h.get("ports_file"))
+        h["gateway_url"] = agent_gateway_url(h)
     h.setdefault("trajectories_dir", os.path.join(runs_root, run, "trajectories", "harness"))
     if h.get("factory"):
         mod, _, fn = h["factory"].partition(":")

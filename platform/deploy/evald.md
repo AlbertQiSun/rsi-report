@@ -1,7 +1,7 @@
 # evald + NanoChat task: cluster deployment (island mode, <node>)
 
 Owner: worker B. Untested on the cluster; everything below was tested on Mac CPU with
-`sandbox=none` only (`tests/test_evald.py`, 24 tests). Step 2 (selftest) is the first real
+`sandbox=none` only (`tests/test_evald.py`, 23 tests). Step 2 (selftest) is the first real
 check of the bwrap sandbox and must pass before anything else runs.
 
 ```bash

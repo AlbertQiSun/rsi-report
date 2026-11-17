@@ -26,11 +26,19 @@ def last_json_line(path: str, offset: int) -> dict | None:
             data = f.read()[-262144:]
     except OSError:
         return None
-    for line in reversed(data.decode(errors="replace").splitlines()):
-        line = line.strip()
-        if line.startswith("{") and line.endswith("}"):
+    lines = [l for l in data.decode(errors="replace").splitlines() if not l.startswith("=== runner")]
+    for i in range(len(lines) - 1, -1, -1):
+        line = lines[i].strip()
+        if not line.startswith("{"):
+            continue
+        cands = [line] if line.endswith("}") else []
+        # an indented multi-line object: from this "{" line to the last "}" line
+        ends = [j for j in range(len(lines) - 1, i, -1) if lines[j].rstrip() == "}"]
+        if ends:
+            cands.append("\n".join(lines[i:ends[0] + 1]))
+        for c in cands:
             try:
-                obj = json.loads(line)
+                obj = json.loads(c)
             except ValueError:
                 continue
             if isinstance(obj, dict):

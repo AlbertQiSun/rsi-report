@@ -34,14 +34,30 @@ def read_token(path: str) -> str | None:
 
 
 class Ports:
+    """ports.json values may be an int port, "host:port", a URL or {host, port, url} (as in
+    rsi.orchestrator.service_url). ``{port:x}`` gives the port, ``{url:x}`` a base URL."""
+
     def __init__(self, path: str):
         self.path = path
 
+    def url(self, name: str) -> str:
+        v = read_json_file(self.path).get(name)
+        if v is None:
+            return f"http://<no-port:{name}>"
+        if isinstance(v, dict):
+            if v.get("url"):
+                return str(v["url"]).rstrip("/")
+            return f"http://{v.get('host', '127.0.0.1')}:{v.get('port')}"
+        if isinstance(v, int) or (isinstance(v, str) and v.isdigit()):
+            return f"http://127.0.0.1:{v}"
+        return str(v).rstrip("/") if str(v).startswith("http") else f"http://{v}"
+
     def get(self, name: str) -> str:
-        p = read_json_file(self.path).get(name)
-        if isinstance(p, dict):  # {"host":..., "port":...}
-            p = p.get("port")
-        return str(p) if p is not None else f"<no-port:{name}>"
+        u = self.url(name)
+        return u.rsplit(":", 1)[-1].split("/")[0] if "<no-port" not in u else f"<no-port:{name}>"
+
+    def resolve(self, kind: str, name: str) -> str:
+        return self.url(name) if kind == "url" else self.get(name)
 
 
 def http(method: str, url: str, token_path: str | None, body: Any = None, timeout: float = 10.0) -> tuple[int, Any]:
@@ -120,21 +136,25 @@ def make_eval_client(base_url: str, token_path: str):
 # vLLM runtime LoRA loading (vLLM --enable-lora with VLLM_ALLOW_RUNTIME_LORA_UPDATING=True)
 # ---------------------------------------------------------------------------
 
-class VllmLoraLoader:
-    def __init__(self, load_url: str, models_url: str, token_path: str, unload_url: str | None = None):
-        self.load_url, self.models_url, self.unload_url = load_url, models_url, unload_url
-        self.token_path = token_path
+class GatewayLoraLoader:
+    """Hot-load adapters through worker C's gateway admin API, which forwards to vLLM's
+    /v1/load_lora_adapter under the full name ``<base>@<name>`` (vLLM runs with --lora)."""
+
+    def __init__(self, load_url: str, list_url: str, token_path: str, base: str = "improver"):
+        self.load_url, self.list_url, self.token_path, self.base = load_url, list_url, token_path, base
 
     def load(self, name: str, path: str) -> tuple[bool, str]:
-        code, body = http("POST", self.load_url, self.token_path, {"lora_name": name, "lora_path": path}, timeout=300)
+        code, body = http("POST", self.load_url, self.token_path,
+                          {"base": self.base, "name": name, "path": os.path.abspath(path)}, timeout=300)
+        up = body.get("upstream_status") if isinstance(body, dict) else None
         if 200 <= code < 300:
             return True, "loaded"
-        if isinstance(body, str) and "already" in body.lower():
+        if "already" in json.dumps(body).lower():
             return True, "already loaded"
-        return False, f"http {code}: {str(body)[:200]}"
+        return False, f"http {code} (upstream {up}): {str(body)[:200]}"
 
     def verify(self, name: str) -> bool:
-        code, body = http("GET", self.models_url, self.token_path, timeout=20)
+        code, body = http("GET", self.list_url, self.token_path, timeout=20)
         if not (200 <= code < 300) or not isinstance(body, dict):
             return False
-        return any(m.get("id") == name for m in body.get("data", []) if isinstance(m, dict))
+        return f"{self.base}@{name}" in (body.get(self.base) or [])

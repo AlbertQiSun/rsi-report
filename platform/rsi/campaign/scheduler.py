@@ -29,7 +29,7 @@ from typing import Any
 from rsi import events
 from rsi.campaign import analysis
 from rsi.campaign.config import CODE_ROOT, Clock, deep_merge, expand, fmt_time, run_checks
-from rsi.campaign.services import (HttpProbe, Ports, VllmLoraLoader, disk_free_gb, gpu_memory,
+from rsi.campaign.services import (GatewayLoraLoader, HttpProbe, Ports, disk_free_gb, gpu_memory,
                                    make_eval_client)
 from rsi.runs import atomic_write_json, read_json
 
@@ -225,12 +225,16 @@ class ActionStep(Step):
         k = self.cfg["kind"]
         srcs = []
         for sid in self.cfg.get("sources", []):
-            srcs += self.c.steps[sid].run_dirs()
+            src = self.c.steps[sid]
+            srcs += src.done_dirs() if isinstance(src, MuarArmStep) else src.run_dirs()
         if k == "lessons":
+            match = self.cfg.get("match_words_of")
             return {"run_dirs": srcs, "model": self.cfg.get("model", "improver"),
                     "gateway_url": self.c.expand(self.c.cfg.get("gateway_url", "")),
                     "out_dir": self.c.expand(self.cfg.get("out_dir") or os.path.join(self.c.dir, "scaffolds", self.id)),
-                    "generic_placebo": bool(self.cfg.get("generic_placebo"))}
+                    "generic_placebo": bool(self.cfg.get("generic_placebo")),
+                    "match_words_of": self.c.steps[match].scaffold_dir() if match else None,
+                    "run": self.c.camp_run, "gen": int(self.cfg.get("gen", 1)), "token_path": self.c.ctx.get("token")}
         if k == "sft":
             return {"run_dirs": srcs, "accepted_only": bool(self.cfg.get("accepted_only", True)),
                     "placebo": bool(self.cfg.get("placebo")),
@@ -393,7 +397,13 @@ class RunStep(Step):
             self.st.pop("pause_owner", None)
 
     def human_paused(self) -> bool:
-        return os.path.exists(self.pause_file()) and not self.st.get("pause_owner")
+        """A PAUSE file written by a person (or ``orchestrator --pause``), not by us or by the
+        orchestrator's own SIGTERM handler."""
+        try:
+            text = open(self.pause_file()).read()
+        except OSError:
+            return False
+        return not (text.startswith("campaign:") or text.startswith("signal"))
 
     def request_stop(self, why: str, now_kill: bool = False) -> None:
         if self.st.get("stop_requested") is None:
@@ -503,11 +513,11 @@ class MuarArmStep(Step):
             names = []
             for sp in splits:
                 for s2 in (mu["heldout"] if sp == "heldout" else [sp]):
-                    n = int(mu["splits"][s2])
-                    idx = self.cfg.get("task_index") or list(range(n))
+                    split_tasks = list(mu["tasks"][s2])
+                    idx = self.cfg.get("task_index") or list(range(len(split_tasks)))
                     if self.c.dry and (self.c.cfg.get("dry_run") or {}).get("muar_tasks_per_split"):
                         idx = idx[: int(self.c.cfg["dry_run"]["muar_tasks_per_split"])]
-                    names += [mu["task_fmt"].format(split=s2, i=i) for i in idx if i < n]
+                    names += [split_tasks[i] for i in idx if i < len(split_tasks)]
             seeds = self.cfg["seeds"]
             if isinstance(seeds, str):
                 seeds = mu["seeds"][seeds]
@@ -517,13 +527,16 @@ class MuarArmStep(Step):
             st["subs"] = {}
             for t in names:
                 for sd in seeds:
-                    slug = t.replace("/", "-").replace("_", "")
+                    slug = t.replace("muar/", "").replace("/", "-").replace("_", "")
                     run = f"{self.c.run_id(self.id)}-{slug}-s{sd}"
                     st["subs"][run] = {"run": run, "task": t, "seed": int(sd), "status": "pending", "tries": 0}
         return st["subs"]
 
     def run_dirs(self) -> list[str]:
         return [os.path.join(self.c.ctx["runs_root"], r) for r in self.subs()]
+
+    def done_dirs(self) -> list[str]:
+        return [os.path.join(self.c.ctx["runs_root"], r) for r, s in self.subs().items() if s["status"] == "done"]
 
     def sub_config(self, sub: dict) -> str:
         mu = self.c.cfg["muar"]
@@ -533,6 +546,7 @@ class MuarArmStep(Step):
              "scaffold_dir": self.cfg.get("scaffold"), "budget": {"trials": N, "wall_s": N * float(mu["est_step_s"]) * 20},
              "rng_seed": sub["seed"], "task_seed": sub["seed"], "seeds": [sub["seed"]], "lanes": [],
              "gen": int(self.cfg.get("gen", 0)), "run": sub["run"], "runs_root": self.c.ctx["runs_root"]}
+        r = deep_merge(mu.get("run_extra") or {}, r)   # e.g. evald factory = LocalEvalClient (CPU scoring)
         r = self.c.resolve_refs(r, self)
         if self.c.dry:
             r["_fake"] = deep_merge({"trial_s": float(mu["est_step_s"])}, self.cfg.get("fake") or {})
@@ -922,24 +936,68 @@ class ServiceStep(Step):
 
 # ---------------------------------------------------------------------------
 class DecisionStep(Step):
-    """Apply the pre-registered Δ₂ rule; record it, emit a ``decision`` event, set flags."""
+    """Apply the pre-registered Δ₂ rule; record it, emit a ``decision`` event, set flags.
+
+    Real mode: worker D's ``rsi.update.analysis`` (s_ref from the sealed sref.json, curves from the
+    run ledgers) in a subprocess. Dry-run: the in-process implementation in rsi.campaign.analysis
+    on the fake runs' ``run_end.nAUC``. Arm references are step ids, or ``<cmd step>:<arm>`` for
+    an ``arms`` block in that step's output file (the µAR runner's non-LLM baselines)."""
+
+    def refs(self) -> list[str]:
+        cfg = self.cfg
+        out = [cfg["arm"], cfg["base"]] + ([cfg["placebo"]] if cfg.get("placebo") else []) + list(cfg.get("aa") or [])
+        for ex in cfg.get("also") or []:
+            out += [ex["arm"], ex["base"]]
+        return list(dict.fromkeys(out))
 
     def start(self) -> None:
         self.set("running")
+        if not self.c.dry:
+            spec = self.analysis_spec()
+            sp = self.step_dir("spec.json")
+            os.makedirs(os.path.dirname(sp), exist_ok=True)
+            atomic_write_json(sp, spec)
+            argv = [self.c.ctx["py"], "-m", "rsi.campaign.actions", "decision", "--spec", sp]
+            self.st["proc"] = self.c.procs.launch(argv, log=self.step_dir("log.txt"), result=self.step_dir("result.json"))
+            return
         self.poll()
 
-    def table(self, sid: str | None) -> dict | None:
-        if not sid:
+    def recover(self) -> None:
+        super().recover()
+        if not self.c.dry and (not self.st.get("proc") or self.c.procs.poll(self.st["proc"])[0] == "lost"):
+            self.st["proc"] = None
+            self.st["status"] = "pending"
+
+    def analysis_spec(self) -> dict:
+        cfg = self.cfg
+        runs, files = {}, {}
+        for ref in self.refs():
+            if ":" in ref:
+                sid, key = ref.split(":", 1)
+                files[ref] = [self.c.steps[sid].out_path(), key]
+            else:
+                s = self.c.steps[ref]
+                if isinstance(s, MuarArmStep) and s.status in OK_STATES:
+                    runs[ref] = s.done_dirs()
+        compare = [[cfg["arm"], cfg["base"]] + ([cfg["placebo"]] if cfg.get("placebo") else [])]
+        compare += [[ex["arm"], ex["base"]] for ex in cfg.get("also") or []]
+        labels = {cfg["arm"]: cfg["arm"]}
+        return {"runs": runs, "arms_files": files, "aa": cfg.get("aa"), "compare": compare,
+                "names": [ex["name"] for ex in cfg.get("also") or []], "labels": labels,
+                "sref_path": self.c.expand(self.c.cfg["muar"].get("sref", "")),
+                "n_trials": int(self.c.cfg["muar"]["N"]),
+                "n_boot": int(self.c.cfg.get("analysis", {}).get("n_boot", 10000)),
+                "floor": self.c.cfg.get("analysis", {}).get("floor", "per_task")}
+
+    def table(self, ref: str | None) -> dict | None:
+        if not ref or ":" in ref:
             return None
-        s = self.c.steps[sid]
+        s = self.c.steps[ref]
         if s.status not in OK_STATES or not isinstance(s, MuarArmStep):
             return None
         return s.table()
 
-    def poll(self) -> None:
-        if self.status == "waiting_human":
-            self.c.poll_human_gate(self)
-            return
+    def compute_inprocess(self) -> dict:
         cfg = self.cfg
         n_boot = int(self.c.cfg.get("analysis", {}).get("n_boot", 2000))
         if self.c.dry:
@@ -950,7 +1008,7 @@ class DecisionStep(Step):
             a0, a1 = self.table(cfg["aa"][0]), self.table(cfg["aa"][1])
             if a0 and a1:
                 aa = (a0, a1)
-        res: dict[str, Any] = {"label": cfg.get("label", self.id)}
+        res: dict[str, Any] = {}
         if not arm or not base:
             res.update({"pass": False, "harmful": False, "reason": "missing arm data", "nodata": True})
         else:
@@ -959,9 +1017,32 @@ class DecisionStep(Step):
         for ex in cfg.get("also") or []:
             a, b = self.table(ex["arm"]), self.table(ex["base"])
             if a and b:
-                r = analysis.bootstrap(a, b, n_boot=n_boot, seed=4)
-                extra.append({"name": ex["name"], **r})
+                extra.append({"name": ex["name"], **analysis.bootstrap(a, b, n_boot=n_boot, seed=4)})
         res["also"] = extra
+        return res
+
+    def poll(self) -> None:
+        if self.status == "waiting_human":
+            self.c.poll_human_gate(self)
+            return
+        cfg = self.cfg
+        if self.c.dry:
+            res = self.compute_inprocess()
+        else:
+            rec = self.st.get("proc")
+            if rec is None:
+                return
+            state, out = self.c.procs.poll(rec)
+            if state == "running":
+                return
+            self.st["proc"] = None
+            res = (out or {}).get("out") or {}
+            if (out or {}).get("rc") != 0 or not res:
+                res = {"pass": False, "harmful": False, "nodata": True,
+                       "reason": f"analysis failed (rc={(out or {}).get('rc')}); see {self.step_dir('log.txt')}"}
+        res["label"] = cfg.get("label", self.id)
+        if cfg.get("label_if_flag") and self.c.flag(cfg["label_if_flag"][0]):
+            res["label"] += " " + cfg["label_if_flag"][1]
         self.st["out"] = res
         self.c.state["decisions"][self.id] = res
         atomic_write_json(os.path.join(self.c.dir, "decisions.json"), self.c.state["decisions"])
@@ -973,7 +1054,7 @@ class DecisionStep(Step):
                   delta2=m.get("delta"), ci=m.get("ci"), p=m.get("p_signflip"), step=self.id)
         for flag, key in (cfg.get("set_flags") or {}).items():
             self.c.state["flags"][flag] = bool(res.get(key))
-        self.c.status_line(event=f"DECISION {res['label']}: {analysis.fmt_delta(res)} — {res.get('reason')}")
+        self.c.status_line(event=f"DECISION {res['label']}: {analysis.fmt_delta(res)} — {str(res.get('reason'))[:300]}")
         req = cfg.get("require")
         if req and not res.get("nodata"):
             ok, failed = run_checks({"delta": m.get("delta")}, {"delta": req})
@@ -1030,8 +1111,9 @@ class Campaign:
         else:
             token = self.ctx.get("token")
             self.evald = _LazyEvald(self.expand(self.cfg.get("evald_url", "")), token)
-            self.loader = VllmLoraLoader(self.expand(self.cfg["lora_admin"]["load_url"]),
-                                         self.expand(self.cfg["lora_admin"]["models_url"]), token)
+            la = self.cfg["lora_admin"]
+            self.loader = GatewayLoraLoader(self.expand(la["load_url"]), self.expand(la["list_url"]), token,
+                                            base=la.get("base", "improver"))
             self.probe = HttpProbe(token)
 
     def child_env(self) -> dict:
@@ -1056,7 +1138,7 @@ class Campaign:
         return fmt_time(t, self.tz)
 
     def expand(self, s: Any) -> Any:
-        return expand(s, self.ctx, self.ports.get)
+        return expand(s, self.ctx, self.ports.resolve)
 
     def run_id(self, step_id: str) -> str:
         return f"{self.cfg['campaign']}-{step_id}".replace("_", "-")
@@ -1075,7 +1157,7 @@ class Campaign:
         ctx.update({k: v for k, v in extra.items() if v is not None})
         if self.dry:
             ctx["py"] = sys.executable
-        return [expand(tok, ctx, self.ports.get) for tok in shlex.split(tmpl)]
+        return [expand(tok, ctx, self.ports.resolve) for tok in shlex.split(tmpl)]
 
     def write_config(self, path: str, obj: dict) -> None:
         os.makedirs(os.path.dirname(path), exist_ok=True)

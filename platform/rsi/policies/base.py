@@ -264,12 +264,16 @@ class Policy:
             kw: dict[str, Any] = dict(seeds=seeds, lane=lane, gen=ctx.gen, trial=trial)
             if level is not None:
                 kw["level"] = level
+            # evald emits eval_submit itself (with the lane it actually assigned); a client without that
+            # ability (test doubles, local CPU evaluators) gets it from the orchestrator instead.
+            evald_emits = accepts_kw(ctx.evald.submit, "emit_submit")
             job_id = submit_compat(ctx.evald, ctx.run, ctx.task.name,
                                    str(ctx.run_dir / "artifacts" / artifact_hash), kw)
             ctx.ledger.append(trial=trial, status="pending", phase="submitted", artifact_hash=artifact_hash,
                               job_id=job_id, seeds=seeds, lane=lane)
-            ctx.emit("eval_submit", "orchestrator", trial=trial, artifact_hash=artifact_hash,
-                     lane=lane, seeds=seeds)
+            if not evald_emits:
+                ctx.emit("eval_submit", "orchestrator", trial=trial, artifact_hash=artifact_hash,
+                         lane=lane, seeds=seeds)
         result = ctx.evald.result(job_id, wait=True, timeout_s=timeout_s)
         result = dict(result or {})
         result.setdefault("status", "crash")
@@ -349,13 +353,21 @@ class Policy:
 
 
 # ---------------------------------------------------------------------------
-def submit_compat(evald, run: str, task: str, artifact_dir: str, kw: dict) -> str:
-    """Call EvalClient.submit, dropping keyword args an older client does not accept."""
+def accepts_kw(fn, name: str) -> bool:
+    import inspect
+
     try:
-        return evald.submit(run, task, artifact_dir, **kw)
-    except TypeError:
-        kw = {k: v for k, v in kw.items() if k in ("seeds", "lane", "gen", "trial")}
-        return evald.submit(run, task, artifact_dir, **kw)
+        params = inspect.signature(fn).parameters
+    except (TypeError, ValueError):
+        return False
+    return name in params or any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values()) and \
+        name in getattr(fn, "__rsi_kwargs__", ())
+
+
+def submit_compat(evald, run: str, task: str, artifact_dir: str, kw: dict) -> str:
+    """Call EvalClient.submit with only the keyword args its signature accepts."""
+    kw = {k: v for k, v in kw.items() if k in ("seeds", "lane", "gen", "trial") or accepts_kw(evald.submit, k)}
+    return evald.submit(run, task, artifact_dir, **kw)
 
 
 def prompt_summary(prompt: str, n: int = 200) -> str:

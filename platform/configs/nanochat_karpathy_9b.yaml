@@ -31,7 +31,8 @@ harness:
   kind: opencode
   sandbox: bwrap
   opencode_bin: ${R}/tools/opencode/current/package/bin/opencode
-  gateway_url: null             # null -> ports.json "gateway"
+  gateway_url: null             # null -> ports.json "gateway_agent" (agent-token-only gateway instance)
+  gateway_ports_key: gateway_agent
   api_key_file: ${R}/run/agent_token
   python: /scratch/user/miniconda3/envs/rsi/bin/python
   platform_dir: ${R}/code/rsi-mini

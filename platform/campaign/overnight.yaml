@@ -45,7 +45,7 @@ paths:
   campaign_dir: "{R}/runs/campaign-{campaign}"
   status_md: "{R}/runs/campaign_status.md"
   adapters: "{R}/adapters/{campaign}"
-  ports: "{R}/run/ports.json"      # keys used: gateway, vllm, evald
+  ports: "{R}/run/ports.json"      # keys used: gateway, evald, vllm_improver (written by C's/B's scripts)
   token: "{R}/run/token"
   gates: "{R}/runs/gates"
   nanochat_start: "{R}/tasks/nanochat/start"   # vanilla start dir for the endpoint re-score (assumption, NOTES_F.md)
@@ -55,20 +55,22 @@ python:
   train: "{R}/envs/rsi-train/bin/python"
 
 base_model: Qwen/Qwen3.5-9B
-gateway_url: "http://127.0.0.1:{port:gateway}/v1"
-evald_url: "http://127.0.0.1:{port:evald}"
-lora_admin:   # vLLM runtime LoRA (needs --enable-lora and VLLM_ALLOW_RUNTIME_LORA_UPDATING=True, worker C)
-  load_url: "http://127.0.0.1:{port:vllm}/v1/load_lora_adapter"
-  models_url: "http://127.0.0.1:{port:vllm}/v1/models"
+gateway_url: "{url:gateway}/v1"
+evald_url: "{url:evald}"
+lora_admin:   # gateway admin API (worker C) -> vLLM /v1/load_lora_adapter as "improver@<name>"; vLLM needs --lora
+  base: improver
+  load_url: "{url:gateway}/rsi/load_adapter"
+  list_url: "{url:gateway}/rsi/adapters"
 
 commands:     # templates; {config} {out} {sft_dir} {adapter_out} {gpu} {model} are filled per step
   orchestrator: "{py} -m rsi.orchestrator --config {config}"
   lora_train: "bash {bundle}/lora_train.sh {sft_dir} {adapter_out} {gpu}"
-  noise_floor: "bash {bundle}/noise_floor.sh --json {out}"
-  toolcall: "{py} {bundle}/toolcall_test.py --model {model} --json {out}"
-  evald_selftest: "{py} -m rsi.evald.selftest --json {out}"
+  noise_floor: "bash {bundle}/noise_floor.sh 20 1,2"          # prints a JSON summary (B)
+  toolcall: "{py} {bundle}/toolcall_test.py --model {model} --out {out}"   # (C)
+  evald_selftest: "{py} -m rsi.evald.selftest"                 # exit 0 only if every check passes (B)
+  muar_baselines: "{py} -m rsi.tasks.muar.runner baseline --method random,local --split heldout --rng-seeds 100,101,102,103,104 --n 12 --workers 8 --out {out}"
   serve_27b_local: "bash {bundle}/serve_vllm.sh 27b {gpu}"
-  restart_vllm: "bash {bundle}/serve_vllm.sh 9b 0"
+  restart_vllm: "bash {bundle}/serve_vllm.sh 9b 0 --lora"
   pack: "tar -czf {R}/out/{campaign}-runs.tgz -C {R} runs"
 
 lanes: [1, 2]
@@ -79,7 +81,7 @@ status_interval_s: 3600      # hourly line in runs/campaign_status.md (plus a li
 stop_grace_s: 900            # a run gets 15 min to reach a trial boundary after PAUSE, then SIGTERM
 max_restarts: 3              # per run, with --resume, backoff 2/4/6 min
 restart_backoff_s: 120
-analysis: {n_boot: 2000}
+analysis: {n_boot: 10000, floor: per_task}   # rsi.update.analysis (D): floor = 2 × sd of per-task A/A diffs
 dry_run:                     # --dry-run only: fake components, compressed clock, smaller µAR fan-out
   time_scale: 2000           # 1 real s = 2000 virtual s: the whole 41-h plan replays in ≈75 s
   muar_tasks_per_split: 2    # (fake sub-runs cost ≈0.25 real s each; the full fan-out would outrun the clock)
@@ -104,17 +106,23 @@ health:
   serving_gpu: 0
   gpu_min_free_gb: 1.0
   services:
-    - {name: vllm, url: "http://127.0.0.1:{port:vllm}/v1/models", critical: true,
+    - {name: vllm, url: "{url:vllm_improver}/v1/models", critical: true,
        restart_cmd: restart_vllm, long_running: true, restart_wait_s: 900, reload_adapters: true}
-    - {name: gateway, url: "http://127.0.0.1:{port:gateway}/v1/models", critical: true}
-    - {name: evald, url: "http://127.0.0.1:{port:evald}/", critical: true}
+    - {name: gateway, url: "{url:gateway}/health", critical: true}
+    - {name: evald, url: "{url:evald}/health", critical: true}
 
 muar:
-  cpu_workers: 16            # of 36 CPUs; the rest serve vLLM, evald data loading, harness, gateway
+  cpu_workers: 24            # concurrent µAR runs (1 CPU each); the rest serve vLLM, evald, harness, gateway
   N: 12                      # proposals per (task, seed), as pre-registered in platform_design.md §5.1
   est_step_s: 8              # 〔估算〕
-  task_fmt: "muar/{split}/{i}"
-  splits: {train: 8, heldout_id: 4, heldout_ood: 4}
+  sref: "{R}/data/sealed/muar/sref.json"   # D's s_ref table (sealed; read only by the analysis subprocess)
+  run_extra:                 # merged into every µAR run config: CPU scoring via D's LocalEvalClient
+    evald: {factory: "rsi.campaign.factories:muar_evald", workers: 1}
+  tasks:                     # rsi.tasks.muar.tasks.SPLITS
+    train: [muar/train-modadd-0, muar/train-modadd-1, muar/train-parity-0, muar/train-parity-1,
+            muar/train-teacher-0, muar/train-teacher-1, muar/train-cls2d-0, muar/train-cls2d-1]
+    heldout_id: [muar/id-modadd-0, muar/id-parity-0, muar/id-teacher-0, muar/id-cls2d-0]
+    heldout_ood: [muar/ood-copyrev-0, muar/ood-dyck-0, muar/ood-icl-0, muar/ood-charlm-0]
   heldout: [heldout_id, heldout_ood]
   policy: karpathy_greedy
   seeds:
@@ -145,11 +153,11 @@ steps:
   est_s: 4200                # 20 vanilla seeds, 10 per lane × 7 min 〔估算〕
   cache: "{gates}/g1a_noise.json"
   deadline: "2026-11-18T02:40"
-  checks: {sd_bpb: "<= 0.02", max_wall_s: "<= 600", n_ok: ">= 18"}
+  checks: {dev_bpb.sd: "<= 0.02", job_wall_s.max: "<= 600", status_counts.ok: ">= 18"}
   on_fail:
     wait_human_s: 1200
     fallbacks:
-      - if: {n_ok: ">= 10"}
+      - if: {status_counts.ok: ">= 10"}
         set_flags: {nanochat_noisy: true}
         status: done
         note: "noisy: every keep needs a confirming seed; NanoChat budgets ×0.8"
@@ -165,7 +173,7 @@ steps:
   est_s: 1200
   cache: "{gates}/g1b_toolcall.json"
   deadline: "2026-11-18T02:40"
-  checks: {schema_valid_rate: ">= 0.90", episode_completion_rate: ">= 0.70"}
+  checks: {call_validity_rate: ">= 0.90", episode_completion_rate: ">= 0.70"}
   on_fail:
     wait_human_s: 1800       # time to try another parser / tool_choice=required
     fallbacks:
@@ -181,7 +189,7 @@ steps:
   est_s: 1200
   cache: "{gates}/g1b_27b.json"
   deadline: "2026-11-18T02:40"
-  checks: {schema_valid_rate: ">= 0.90", episode_completion_rate: ">= 0.70"}
+  checks: {call_validity_rate: ">= 0.90", episode_completion_rate: ">= 0.70"}
   on_fail:
     wait_human_s: 1200
     fallbacks:
@@ -194,9 +202,8 @@ steps:
   cmd: evald_selftest
   plan: "11-18 01:00–01:05"
   est_s: 300
-  cache: "{gates}/g1c_evald.json"
   deadline: "2026-11-18T02:40"
-  checks: {all_pass: "== true"}
+  checks: {}                 # the self-test's exit code is the gate
   on_fail:
     wait_human_s: 3600       # plan §6.8: do not start NanoChat on an evaluator that fails its self-tests
     fallbacks:
@@ -300,31 +307,17 @@ steps:
   est_s: 1800
   deadline: "2026-11-18T06:00"
 
-- id: mu_rlocal              # non-LLM local-perturbation baseline (design Gate 2)
+- id: mu_baselines           # non-LLM baselines R (random) and R-local on held-out, D's runner CLI
   phase: 1
-  kind: muar_arm
+  kind: cmd
+  cmd: muar_baselines
   after: [g2_muar_smoke]
   requires_flags: [muar]
-  splits: heldout
-  seeds: heldout
-  policy: muar_local
-  plan: "11-18 02:15–02:50"
+  plan: "11-18 02:15–02:20"
   est_s: 600
-  min_ok_frac: 0.5
   deadline: "2026-11-18T06:00"
-
-- id: mu_rand                # random search baseline
-  phase: 1
-  kind: muar_arm
-  after: [g2_muar_smoke]
-  requires_flags: [muar]
-  splits: heldout
-  seeds: heldout
-  policy: muar_random
-  plan: "11-18 02:15–02:50"
-  est_s: 600
-  min_ok_frac: 0.5
-  deadline: "2026-11-18T06:00"
+  checks: {}
+  on_fail: {fallbacks: [{status: done, note: "no baselines: Gate 2 recorded as no data"}]}
 
 - id: ladder_mu              # capability ladder on µAR (27B, held-out, same seeds as A0a)
   phase: 1
@@ -355,9 +348,9 @@ steps:
   phase: 1
   kind: decision
   needs: [mu_a0a]
-  after: [mu_rlocal]
+  after: [mu_baselines]
   arm: mu_a0a
-  base: mu_rlocal
+  base: "mu_baselines:R-local"
   label: "Gate2 M0 vs R-local"
   require: "> 0"
   plan: "11-18 ≈02:50"
@@ -382,9 +375,10 @@ steps:
 - id: us_placebo_mu          # placebo: same length, written without reading trajectories
   phase: 2
   kind: lessons
-  needs: [mu_g0]
+  needs: [mu_g0, us_lessons_mu]
   sources: [mu_g0]
   generic_placebo: true
+  match_words_of: us_lessons_mu
   out_dir: "{campaign_dir}/scaffolds/us_placebo_mu-placebo"
   model: improver
   gen: 1
@@ -427,6 +421,7 @@ steps:
   placebo: mu_a1p
   aa: [mu_a0a, mu_a0b]
   label: "Δ₂(0) U_s lessons"
+  label_if_flag: [muar_gate2_failed, "(Gate 2 failed)"]
   set_flags: {us1_pass: pass}
   plan: "11-18 ≈03:30"
 
@@ -515,6 +510,7 @@ steps:
   also: [{name: "U_w vs U_s (weights vs retrieval)", arm: mu_a2, base: mu_a1},
          {name: "27B vs 9B (ladder)", arm: ladder_mu, base: mu_a0a}]
   label: "Δ₂(0) U_w M1"
+  label_if_flag: [muar_gate2_failed, "(Gate 2 failed)"]
   set_flags: {uw1_pass: pass, uw1_harmful: harmful}
   plan: "11-18 ≈05:00"
 
@@ -613,6 +609,7 @@ steps:
   aa: [mu_a0a, mu_a0b]
   also: [{name: "M2 vs M0", arm: mu_a3, base: mu_a0a}]
   label: "Δ₂(1) U_w M2 (vs M2' more-M0-data)"
+  label_if_flag: [muar_gate2_failed, "(Gate 2 failed)"]
   set_flags: {uw2_pass: pass, uw2_harmful: harmful}
   plan: "11-18 ≈07:15"
 
@@ -686,6 +683,7 @@ steps:
   aa: [mu_a0a, mu_a0b]
   also: [{name: "M3 vs M0", arm: mu_a4, base: mu_a0a}]
   label: "Δ₂(2) U_w M3 (vs M3')"
+  label_if_flag: [muar_gate2_failed, "(Gate 2 failed)"]
   set_flags: {uw3_pass: pass}
   plan: "11-18 ≈09:30"
 
@@ -764,7 +762,7 @@ steps:
   lane: 2
   cmd: serve_27b_local
   probe: vllm_27b
-  url: "http://127.0.0.1:{port:vllm_27b}/v1/models"
+  url: "{url:vllm_ladder-27b}/v1/models"
   up_flag: ladder27b_local_up
   fail_flags: {ladder27b_local_failed: true}
   until: [ladder_fb_nc]

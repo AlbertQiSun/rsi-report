@@ -108,16 +108,17 @@ class Clock:
 _TOKEN = re.compile(r"\{([A-Za-z_][\w.\-]*(?::[\w.\-]+)?)\}")
 
 
-def expand(obj: Any, ctx: dict, port_resolver: Callable[[str], str] | None = None) -> Any:
-    """Expand ``{name}`` and ``{port:name}`` in strings (recursively in lists and dicts).
-    Unknown names are left untouched so a later pass can fill them."""
+def expand(obj: Any, ctx: dict, port_resolver: Callable[[str, str], str] | None = None) -> Any:
+    """Expand ``{name}``, ``{port:name}`` and ``{url:name}`` (from ports.json) in strings, recursively
+    in lists and dicts. Unknown names are left untouched so a later pass can fill them."""
     if isinstance(obj, str):
         def sub(m: re.Match) -> str:
             key = m.group(1)
-            if key.startswith("port:"):
+            if key.startswith(("port:", "url:")):
                 if port_resolver is None:
                     return m.group(0)
-                return str(port_resolver(key[5:]))
+                kind, name = key.split(":", 1)
+                return str(port_resolver(kind, name))
             if key in ctx and ctx[key] is not None:
                 return str(ctx[key])
             return m.group(0)
@@ -180,11 +181,24 @@ def check_one(value: Any, spec: Any) -> bool:
             "==": value == rhs, "!=": value != rhs}[op]
 
 
+def get_path(metrics: dict, key: str) -> Any:
+    """``metrics[key]``, or a dotted path into nested dicts (``dev_bpb.sd``)."""
+    if key in metrics:
+        return metrics[key]
+    cur: Any = metrics
+    for part in key.split("."):
+        if not isinstance(cur, dict) or part not in cur:
+            return None
+        cur = cur[part]
+    return cur
+
+
 def run_checks(metrics: dict, checks: dict) -> tuple[bool, list[str]]:
     failed = []
     for key, spec in (checks or {}).items():
-        if not check_one(metrics.get(key), spec):
-            failed.append(f"{key}={metrics.get(key)!r} !{spec}")
+        v = get_path(metrics or {}, key)
+        if not check_one(v, spec):
+            failed.append(f"{key}={v!r} !{spec}")
     return (not failed), failed
 
 

@@ -123,9 +123,9 @@ def main(argv=None) -> int:
     if a.what == "sandbox":
         return cmd_sandbox(cfg)
     if not cfg.get("gateway_url"):
-        from rsi.orchestrator import service_url
+        from rsi.orchestrator import agent_gateway_url
 
-        cfg["gateway_url"] = service_url("gateway")
+        cfg["gateway_url"] = agent_gateway_url(cfg)
     return cmd_episode(cfg, a.model)
 
 

@@ -49,7 +49,7 @@ def default_forbidden() -> list[str]:
     home = os.path.expanduser("~")
     out = [os.path.join(home, ".ssh"), home,
            os.path.join(R, "data", "devval"), os.path.join(R, "data", "sealed"),
-           os.path.join(R, "run"), os.path.join(R, "runs"), os.path.join(R, "spool"),
+           os.path.join(R, "run"), os.path.join(R, "runs"), os.path.join(R, "spool"), os.path.join(R, "evald"),
            "/scratch/user/otherproj"]
     extra = os.environ.get("RSI_SANDBOX_FORBIDDEN", "")
     out += [p for p in extra.split(":") if p]
