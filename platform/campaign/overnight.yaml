@@ -36,7 +36,7 @@
 # skip_if_flags (checked once deps finish), wait_for_flags, not_before, latest_start (skip if passed),
 # deadline (graceful stop; partial results kept), holds (mutual exclusion, e.g. gpu2).
 
-campaign: ovn1118
+campaign: ovn1118b           # restarted 11-17 23:55 after the harness-config fix (ovn1118 aborted)
 task: overnight
 tz: "+08:00"                       # every clock time below is Beijing time
 planned_start: "2026-11-17T22:45"  # platform deployed ≈22:30; the campaign starts with the gates (P0)
@@ -122,6 +122,20 @@ muar:
   sref: "{R}/data/sealed/muar/sref.json"   # D's s_ref table (sealed; read only by the analysis subprocess)
   run_extra:                 # merged into every µAR run config: CPU scoring via D's LocalEvalClient
     evald: {factory: "rsi.campaign.factories:muar_evald", workers: 1}
+    harness:                 # µAR proposals are small JSON configs: the in-repo mini harness (same bwrap sandbox, no web)
+      kind: mini
+      sandbox: bwrap
+      gateway_url: null
+      gateway_ports_key: gateway_agent
+      api_key_file: "{R}/run/agent_token"
+      python: /scratch/user/miniconda3/envs/rsi/bin/python
+      platform_dir: "{R}/platform"
+      ro_paths: [/scratch/user/miniconda3/envs/rsi, "{R}/envs/rsi-train", "{R}/platform"]
+      sandbox_path: "{R}/envs/rsi-train/bin:/scratch/user/miniconda3/envs/rsi/bin:/usr/local/bin:/usr/bin:/bin"
+      web: false
+      subagents: false
+      context_tokens: 65536
+      max_output_tokens: 8192
   tasks:                     # rsi.tasks.muar.tasks.SPLITS
     train: [muar/train-modadd-0, muar/train-modadd-1, muar/train-parity-0, muar/train-parity-1,
             muar/train-teacher-0, muar/train-teacher-1, muar/train-cls2d-0, muar/train-cls2d-1]
@@ -138,6 +152,24 @@ muar:
     aa: [200, 201, 202, 203, 204]        # A0b only: A/A noise floor
 
 run_defaults:
+  harness:                     # 2026-11-17 fix: campaign run configs had NO harness block -> "opencode" not found in bwrap
+    kind: opencode
+    sandbox: bwrap
+    opencode_bin: "{R}/tools/opencode/current/package/bin/opencode"
+    gateway_url: null
+    gateway_ports_key: gateway_agent
+    api_key_file: "{R}/run/agent_token"
+    python: /scratch/user/miniconda3/envs/rsi/bin/python
+    platform_dir: "{R}/platform"
+    ddg_cmd: ["{R}/envs/mcp/bin/duckduckgo-mcp-server"]
+    fetch_cmd: ["{R}/envs/mcp/bin/mcp-server-fetch"]
+    ro_paths: [/scratch/user/miniconda3/envs/rsi, "{R}/envs/mcp", "{R}/envs/rsi-train", "{R}/platform", "{R}/tools/opencode"]
+    sandbox_path: "{R}/envs/rsi-train/bin:/usr/local/bin:/usr/bin:/bin"
+    web: true
+    subagents: true
+    export: true
+    context_tokens: 65536
+    max_output_tokens: 8192
   task: nanochat
   policy: karpathy_greedy
   model: improver
