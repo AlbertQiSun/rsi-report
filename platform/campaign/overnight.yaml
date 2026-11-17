@@ -364,31 +364,6 @@ steps:
   checks: {}
   on_fail: {fallbacks: [{status: done, note: "no baselines: Gate 2 recorded as no data"}]}
 
-- id: ladder_mu              # capability ladder on µAR (27B, held-out, same seeds as A0a)
-  phase: 1
-  kind: muar_arm
-  after: [g1b_27b, g2_muar_smoke]
-  requires_flags: [muar, ladder27b_remote]
-  splits: heldout
-  seeds: heldout
-  model: ladder-27b
-  plan: "11-17 23:30 – 11-18 00:30"
-  est_s: 3600
-  deadline: "2026-11-18T05:00"
-
-- id: mu_d0p                 # D_0' (more M0 data, for the gen-2 control)
-  phase: 1
-  kind: muar_arm
-  after: [mu_g0]
-  requires_flags: [muar]
-  splits: train
-  seeds: d1
-  model: improver
-  gen: 0
-  plan: "11-18 00:10–00:50"
-  est_s: 2400
-  deadline: "2026-11-18T05:00"
-
 - id: g2b_beats_rlocal       # design Gate 2: M0 must beat local perturbation on held-out
   phase: 1
   kind: decision
@@ -542,6 +517,33 @@ steps:
   plan: "11-18 01:55–02:25"
   est_s: 2400
   deadline: "2026-11-18T06:00"
+
+- id: mu_d0p                 # D_0' (more M0 data, for the gen-2 control)
+  phase: 1
+  kind: muar_arm
+  after: [mu_g0]
+  requires_flags: [muar]
+  splits: train
+  seeds: d1
+  model: improver
+  gen: 0
+  plan: "11-18 00:10–00:50"
+  est_s: 2400
+  deadline: "2026-11-18T05:00"
+
+- id: ladder_mu              # capability ladder on µAR (27B, held-out, same seeds as A0a)
+  phase: 1
+  kind: muar_arm
+  after: [g1b_27b, g2_muar_smoke]
+  requires_flags: [muar, ladder27b_remote]
+  splits: heldout
+  seeds: heldout
+  model: ladder-27b
+  plan: "11-17 23:30 – 11-18 00:30"
+  est_s: 3600
+  deadline: "2026-11-18T05:00"
+  sub_timeout_s: 7200       # 27B µAR sub-runs take ~55-75 min; default 3600 killed them
+  # moved after mu_d1: the µAR CPU pool is filled in yaml order, so 9B Δ₂ arms (mu_a1/a1p/a2/a2p/d1) go first
 
 - id: dec_g1
   phase: 3
@@ -1110,6 +1112,7 @@ steps:
   plan: "11-18 ≈01:00–02:30"
   est_s: 5400
   deadline: "2026-11-18T14:00"
+  sub_timeout_s: 7200
 
 - id: mu_a0b_27b             # A/A for 27B (disjoint seeds); A0a(27B) = ladder_mu
   phase: 6
@@ -1123,6 +1126,7 @@ steps:
   plan: "11-18 ≈01:00–02:30"
   est_s: 5400
   deadline: "2026-11-18T16:00"
+  sub_timeout_s: 7200
 
 - id: mu_d0p_27b             # D_0'(27B): more M0 data for the gen-2 control
   phase: 6
@@ -1136,6 +1140,7 @@ steps:
   plan: "11-18 ≈02:30–04:00"
   est_s: 5400
   deadline: "2026-11-18T20:00"
+  sub_timeout_s: 7200
 
 - id: us_lessons_mu_27b      # U_s(27B): 27B writes lessons from its own G0
   phase: 6
@@ -1172,6 +1177,7 @@ steps:
   plan: "11-18 ≈03:00–04:30"
   est_s: 5400
   deadline: "2026-11-18T20:00"
+  sub_timeout_s: 7200
 
 - id: mu_a1p_27b
   phase: 6
@@ -1185,6 +1191,7 @@ steps:
   plan: "11-18 ≈03:00–04:30"
   est_s: 5400
   deadline: "2026-11-18T20:00"
+  sub_timeout_s: 7200
 
 - id: dec_us_27b
   phase: 6
@@ -1278,6 +1285,7 @@ steps:
   plan: "11-18 ≈08:00–09:30"
   est_s: 5400
   deadline: "2026-11-19T04:00"
+  sub_timeout_s: 7200
 
 - id: mu_a2p_27b
   phase: 6
@@ -1293,6 +1301,7 @@ steps:
   plan: "11-18 ≈08:00–09:30"
   est_s: 5400
   deadline: "2026-11-19T04:00"
+  sub_timeout_s: 7200
 
 - id: mu_d1_27b              # D_1(27B) for gen 2
   phase: 6
@@ -1308,6 +1317,7 @@ steps:
   plan: "11-18 ≈08:00–09:30"
   est_s: 5400
   deadline: "2026-11-19T04:00"
+  sub_timeout_s: 7200
 
 - id: dec_g1_27b
   phase: 6
@@ -1402,6 +1412,7 @@ steps:
   plan: "11-18 ≈15:00–16:30"
   est_s: 5400
   deadline: "2026-11-19T17:30"
+  sub_timeout_s: 7200
 
 - id: mu_a3c_27b
   phase: 6
@@ -1417,6 +1428,7 @@ steps:
   plan: "11-18 ≈15:00–16:30"
   est_s: 5400
   deadline: "2026-11-19T17:30"
+  sub_timeout_s: 7200
 
 - id: dec_g2_27b
   phase: 6
