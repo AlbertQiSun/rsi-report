@@ -315,6 +315,39 @@ steps:
   stall_s: 2400
   abort_if: {min_trials: 12, ok_rate_lt: 0.2}
 
+- id: nc_g0_cc               # harness arm (user 11-18 02:10): same 9B / policy / seeds as nc_g0, Claude Code instead of OpenCode
+  phase: 1                   # lane 2 is free until lora_g2 pauses it (~1 h); evals queue during the pause
+  kind: run
+  after: [g1a_noise, g1c_evald]
+  requires_flags: [nanochat, nanochat_9b]
+  plan: "11-18 02:15 – 06:30 lane 2"
+  run:
+    policy: karpathy_greedy
+    model: improver
+    lanes: [2]
+    policy_cfg: {threads: 1, trials_per_thread: 30}
+    budget: {trials: 30}
+    rng_seed: 1000           # same agent seed as nc_g0 -> paired comparison
+    harness:
+      kind: claude_code
+      claude_bin: "{R}/tools/claude/current/claude"
+      gateway_ports_key: gateway_agent_cc     # separate gateway instance (G1b-CC passed 11-18 01:38)
+      auth_env: ANTHROPIC_AUTH_TOKEN
+      ro_paths: [/scratch/user/miniconda3/envs/rsi, "{R}/envs/mcp", "{R}/envs/rsi-train", "{R}/platform", "{R}/tools/claude"]
+      tools: "Bash,Read,Edit,Write,Glob,Grep,Agent"
+      disallowed_tools: [WebSearch, WebFetch]
+      permission_mode: bypassPermissions
+      max_turns: 40
+      context_tokens: 122880
+      max_output_tokens: 8192
+  overlays: [{when: nanochat_noisy, set: {policy_cfg: {confirm_seeds: [1]}, budget: {trials: 24}}}]
+  stop_when_trials: 30
+  est_trial_s: 600           # 〔估算〕
+  est_s: 15000
+  deadline: "2026-11-18T14:00"
+  stall_s: 2400
+  abort_if: {min_trials: 8, ok_rate_lt: 0.2}
+
 - id: mu_g0                  # D_0
   phase: 1
   kind: muar_arm
