@@ -1,0 +1,683 @@
+# µAR charlm corpus: frozen snapshot (2026-11-17) of platform/rsi/{events,runs,ledger,context}.py and rsi/tasks/base.py. Do not edit: scores depend on it.
+# ==== rsi/events.py
+"""Append-only event log, schema v1 (see platform/EVENTS_SCHEMA.md).
+
+Every component writes through ``emit()``. One JSON object per line in
+``runs/<run_id>/events.jsonl``. Several processes on one node append to the
+same file (orchestrator, gateway thread, evald), so each line is written with a
+single ``os.write`` on an ``O_APPEND`` descriptor under an exclusive ``flock``.
+"""
+
+from __future__ import annotations
+
+import fcntl
+import json
+import os
+import re
+import threading
+import time
+from typing import Any
+
+SCHEMA_VERSION = 1
+
+COMMON_FIELDS = ("t", "run", "ev", "agent", "parent", "gen", "trial")
+
+# Required extra fields per event type (schema v1). Extra optional fields are allowed.
+EVENT_FIELDS: dict[str, tuple[str, ...]] = {
+    "run_start": ("policy", "task", "improver", "budget", "config_hash"),
+    "agent_spawn": ("role", "model"),
+    "agent_end": ("reason",),
+    "message": ("to", "summary", "tokens"),
+    "llm_call": ("model", "prompt_tokens", "completion_tokens", "latency_s"),
+    "tool_call": ("tool", "arg_summary", "ok", "latency_s"),
+    "proposal": ("hypothesis", "diff_stat", "artifact_hash"),
+    "eval_submit": ("artifact_hash", "lane", "seeds"),
+    "eval_result": ("artifact_hash", "metric", "value", "seeds", "wall_s", "status", "audit"),
+    "decision": ("artifact_hash", "verdict", "best_before", "best_after", "reason"),
+    "audit_flag": ("artifact_hash", "check", "detail"),
+    "lessons_update": ("scaffold_hash_before", "scaffold_hash_after", "n_lessons"),
+    "weights_update": ("adapter_path", "n_examples", "base_model"),
+    "run_end": ("best_value", "n_trials", "nAUC"),
+}
+
+ROLES = {"researcher", "subagent", "critic", "lessons-writer"}
+EVAL_STATUSES = {"ok", "timeout", "crash", "nan", "audit_fail"}
+VERDICTS = {"adopt", "reject", "rollback", "explore"}
+
+LIMITS = {"summary": 200, "arg_summary": 200, "hypothesis": 300}
+
+# Redact things that look like credentials before they reach the log.
+_SECRET_RES = [
+    re.compile(r"(?i)(bearer\s+)[A-Za-z0-9._\-]{8,}"),
+    re.compile(r"(?i)((?:api[_-]?key|token|secret|password|authorization)[\"']?\s*[:=]\s*[\"']?)[^\s\"',}]{4,}"),
+    re.compile(r"\bsk-[A-Za-z0-9]{8,}"),
+    re.compile(r"\bhf_[A-Za-z0-9]{8,}"),
+]
+
+
+def redact(text: str) -> str:
+    for rx in _SECRET_RES:
+        if rx.groups:
+            text = rx.sub(lambda m: m.group(1) + "<redacted>", text)
+        else:
+            text = rx.sub("<redacted>", text)
+    return text
+
+
+def clip(text: Any, n: int) -> str:
+    s = redact(" ".join(str(text if text is not None else "").split()))
+    return s if len(s) <= n else s[: n - 1] + "…"
+
+
+class SchemaError(ValueError):
+    pass
+
+
+def validate(event: dict) -> None:
+    """Raise SchemaError if ``event`` violates schema v1."""
+    for f in COMMON_FIELDS:
+        if f not in event:
+            raise SchemaError(f"missing common field {f!r} in {event.get('ev')}")
+    ev = event["ev"]
+    if ev not in EVENT_FIELDS:
+        raise SchemaError(f"unknown event type {ev!r}")
+    for f in EVENT_FIELDS[ev]:
+        if f not in event:
+            raise SchemaError(f"{ev}: missing field {f!r}")
+    if not isinstance(event["t"], (int, float)):
+        raise SchemaError("t must be a number")
+    if not isinstance(event["run"], str) or not isinstance(event["agent"], str):
+        raise SchemaError("run and agent must be strings")
+    if event["parent"] is not None and not isinstance(event["parent"], str):
+        raise SchemaError("parent must be str or null")
+    if not isinstance(event["gen"], int):
+        raise SchemaError("gen must be int")
+    if event["trial"] is not None and not isinstance(event["trial"], int):
+        raise SchemaError("trial must be int or null")
+    for f, n in LIMITS.items():
+        if f in event and isinstance(event[f], str) and len(event[f]) > n:
+            raise SchemaError(f"{ev}: {f} longer than {n} chars")
+    if ev == "agent_spawn" and event["role"] not in ROLES:
+        raise SchemaError(f"agent_spawn: bad role {event['role']!r}")
+    if ev == "eval_result":
+        if event["status"] not in EVAL_STATUSES:
+            raise SchemaError(f"eval_result: bad status {event['status']!r}")
+        a = event["audit"]
+        if not (isinstance(a, dict) and "level" in a and isinstance(a.get("flags"), list)):
+            raise SchemaError("eval_result: audit must be {level, flags[]}")
+    if ev == "decision" and event["verdict"] not in VERDICTS:
+        raise SchemaError(f"decision: bad verdict {event['verdict']!r}")
+    if ev == "proposal":
+        d = event["diff_stat"]
+        if not (isinstance(d, dict) and {"files", "plus", "minus"} <= set(d)):
+            raise SchemaError("proposal: diff_stat must be {files, plus, minus}")
+    if ev == "tool_call" and not isinstance(event["ok"], bool):
+        raise SchemaError("tool_call: ok must be bool")
+
+
+class EventLog:
+    """Writer bound to one run's ``events.jsonl``."""
+
+    def __init__(self, path: str, run: str, strict: bool = True):
+        self.path = path
+        self.run = run
+        self.strict = strict
+        self._lock = threading.Lock()
+        os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+
+    def emit(self, ev: str, agent: str, *, parent: str | None = None, gen: int = 0,
+             trial: int | None = None, t: float | None = None, **fields: Any) -> dict:
+        event = {
+            "t": round(time.time() if t is None else t, 3),
+            "run": self.run,
+            "ev": ev,
+            "agent": agent,
+            "parent": parent,
+            "gen": int(gen),
+            "trial": trial,
+        }
+        for k, v in fields.items():
+            if k in LIMITS and isinstance(v, str):
+                v = clip(v, LIMITS[k])
+            event[k] = v
+        if self.strict:
+            validate(event)
+        line = (json.dumps(event, ensure_ascii=False, separators=(",", ":"), default=str) + "\n").encode()
+        with self._lock:
+            fd = os.open(self.path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX)
+                os.write(fd, line)
+            finally:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+                os.close(fd)
+        return event
+
+
+_logs: dict[str, EventLog] = {}
+_run_paths: dict[str, str] = {}
+_logs_lock = threading.Lock()
+
+
+def runs_root() -> str:
+    """Root of all run dirs: $RSI_RUNS_ROOT, else ./runs."""
+    return os.environ.get("RSI_RUNS_ROOT") or os.path.abspath("runs")
+
+
+def register_run(run: str, events_path: str) -> None:
+    """Bind a run id to an explicit events.jsonl path (otherwise <runs_root>/<run>/events.jsonl)."""
+    with _logs_lock:
+        _run_paths[run] = os.path.abspath(events_path)
+
+
+def events_path(run: str) -> str:
+    return _run_paths.get(run) or os.path.join(runs_root(), run, "events.jsonl")
+
+
+def get_log(path: str, run: str) -> EventLog:
+    key = os.path.abspath(path)
+    with _logs_lock:
+        if key not in _logs:
+            _logs[key] = EventLog(path, run)
+        return _logs[key]
+
+
+def emit(run: str, ev: str, agent: str, *, parent: str | None = None, gen: int = 0,
+         trial: int | None = None, **fields: Any) -> dict:
+    """Write one schema-v1 event for ``run`` (INTERFACES.md signature).
+
+    The file is ``register_run(run, path)`` if called in this process, else
+    ``$RSI_RUNS_ROOT/<run>/events.jsonl``. Raises SchemaError on an invalid event.
+    """
+    return get_log(events_path(run), run).emit(ev, agent, parent=parent, gen=gen, trial=trial, **fields)
+
+
+def read_events(path: str) -> list[dict]:
+    out = []
+    with open(path) as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                out.append(json.loads(line))
+    return out
+
+
+def validate_file(path: str) -> list[dict]:
+    """Validate every line; returns the events. Also checks basic replayability."""
+    events = read_events(path)
+    if not events:
+        raise SchemaError("empty event log")
+    runs = {e.get("run") for e in events}
+    if len(runs) != 1:
+        raise SchemaError(f"multiple run ids in one log: {runs}")
+    for i, e in enumerate(events):
+        try:
+            validate(e)
+        except SchemaError as err:
+            raise SchemaError(f"line {i + 1}: {err}") from None
+    if events[0]["ev"] != "run_start":
+        raise SchemaError("first event must be run_start")
+    return events
+
+
+if __name__ == "__main__":  # python -m rsi.events <events.jsonl>
+    import sys
+
+    evs = validate_file(sys.argv[1])
+    counts: dict[str, int] = {}
+    for e in evs:
+        counts[e["ev"]] = counts.get(e["ev"], 0) + 1
+    print(json.dumps({"ok": True, "n": len(evs), "counts": counts}, indent=1))
+# ==== rsi/runs.py
+"""Run directory layout, content-addressed artifacts, and the append-only ledger.
+
+Layout (one directory per run, ``<runs_root>/<run_id>/``)::
+
+    config.json            frozen config of the run (hash in run_start)
+    state.json             resumable orchestrator state (rewritten atomically)
+    events.jsonl           event log, schema v1 (replay source for the visualizer)
+    ledger.jsonl           one line per trial state change (append-only)
+    sealed.jsonl           sealed-split scores (evald only; never shown to agents)
+    PAUSE                  if present, threads stop at the next trial boundary
+    artifacts/<hash>/      immutable snapshot of the editable files of one proposal
+    trajectories/gateway/  full chat requests/responses per agent (LoRA data)
+    trajectories/harness/  raw harness output (OpenCode NDJSON, exports)
+    threads/<tid>/workspace/  the agent-writable working copy
+    threads/<tid>/lab/        lab MCP spool: history.jsonl (ro view), outbox/ (submissions)
+    threads/<tid>/home/       HOME of the harness inside the sandbox
+    audits/                L3 review queue, audit reports
+"""
+
+from __future__ import annotations
+
+import difflib
+import hashlib
+import json
+import os
+import shutil
+import tempfile
+import threading
+import time
+from dataclasses import dataclass
+from typing import Any, Iterable
+
+
+def sha256_bytes(b: bytes) -> str:
+    return hashlib.sha256(b).hexdigest()
+
+
+def stable_hash(obj: Any, n: int = 12) -> str:
+    return sha256_bytes(json.dumps(obj, sort_keys=True, default=str).encode())[:n]
+
+
+def atomic_write_json(path: str, obj: Any) -> None:
+    d = os.path.dirname(os.path.abspath(path))
+    os.makedirs(d, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=d, prefix=".tmp-")
+    with os.fdopen(fd, "w") as f:
+        json.dump(obj, f, indent=1, sort_keys=True, default=str)
+    os.replace(tmp, path)
+
+
+def read_json(path: str, default: Any = None) -> Any:
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return default
+
+
+def append_jsonl(path: str, obj: Any) -> None:
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    line = (json.dumps(obj, sort_keys=True, default=str) + "\n").encode()
+    fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
+    try:
+        os.write(fd, line)
+    finally:
+        os.close(fd)
+
+
+def read_jsonl(path: str) -> list[dict]:
+    if not os.path.exists(path):
+        return []
+    out = []
+    with open(path) as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                out.append(json.loads(line))
+    return out
+
+
+@dataclass
+class RunDir:
+    root: str
+    run_id: str
+
+    @property
+    def path(self) -> str:
+        return os.path.join(self.root, self.run_id)
+
+    def p(self, *parts: str) -> str:
+        return os.path.join(self.path, *parts)
+
+    @property
+    def events(self) -> str:
+        return self.p("events.jsonl")
+
+    @property
+    def ledger_path(self) -> str:
+        return self.p("ledger.jsonl")
+
+    @property
+    def state_path(self) -> str:
+        return self.p("state.json")
+
+    @property
+    def config_path(self) -> str:
+        return self.p("config.json")
+
+    @property
+    def sealed_path(self) -> str:
+        return self.p("sealed.jsonl")
+
+    @property
+    def pause_flag(self) -> str:
+        return self.p("PAUSE")
+
+    def thread_dir(self, tid: str, *parts: str) -> str:
+        return self.p("threads", tid, *parts)
+
+    def create(self) -> "RunDir":
+        for d in ("artifacts", "trajectories/gateway", "trajectories/harness", "threads", "audits"):
+            os.makedirs(self.p(d), exist_ok=True)
+        return self
+
+    def paused(self) -> bool:
+        return os.path.exists(self.pause_flag)
+
+
+# ---------------------------------------------------------------------------
+# Artifacts: content-addressed snapshots of the editable files
+# ---------------------------------------------------------------------------
+
+def artifact_hash(files: dict[str, bytes]) -> str:
+    h = hashlib.sha256()
+    for name in sorted(files):
+        h.update(name.encode() + b"\0" + hashlib.sha256(files[name]).digest())
+    return h.hexdigest()[:12]
+
+
+def snapshot_files(workspace: str, names: Iterable[str]) -> dict[str, bytes]:
+    out = {}
+    for n in names:
+        fp = os.path.join(workspace, n)
+        if os.path.isfile(fp):
+            with open(fp, "rb") as f:
+                out[n] = f.read()
+    return out
+
+
+class ArtifactStore:
+    def __init__(self, root: str):
+        self.root = root
+        os.makedirs(root, exist_ok=True)
+
+    def put(self, files: dict[str, bytes]) -> str:
+        h = artifact_hash(files)
+        d = os.path.join(self.root, h)
+        if not os.path.isdir(d):
+            tmp = tempfile.mkdtemp(dir=self.root, prefix=".tmp-")
+            for name, data in files.items():
+                fp = os.path.join(tmp, name)
+                os.makedirs(os.path.dirname(fp), exist_ok=True)
+                with open(fp, "wb") as f:
+                    f.write(data)
+            try:
+                os.rename(tmp, d)
+            except OSError:  # raced with another writer
+                shutil.rmtree(tmp, ignore_errors=True)
+        return h
+
+    def dir(self, h: str) -> str:
+        return os.path.join(self.root, h)
+
+    def get(self, h: str) -> dict[str, bytes]:
+        d = self.dir(h)
+        out = {}
+        for base, _, files in os.walk(d):
+            for fn in files:
+                fp = os.path.join(base, fn)
+                with open(fp, "rb") as f:
+                    out[os.path.relpath(fp, d)] = f.read()
+        return out
+
+    def checkout(self, h: str, workspace: str) -> None:
+        """Make the editable files in ``workspace`` equal to artifact ``h``."""
+        for name, data in self.get(h).items():
+            fp = os.path.join(workspace, name)
+            os.makedirs(os.path.dirname(fp), exist_ok=True)
+            with open(fp, "wb") as f:
+                f.write(data)
+
+
+def diff_stat(old: dict[str, bytes], new: dict[str, bytes]) -> dict[str, int]:
+    files = plus = minus = 0
+    for name in sorted(set(old) | set(new)):
+        a = old.get(name, b"").decode(errors="replace").splitlines()
+        b = new.get(name, b"").decode(errors="replace").splitlines()
+        if a == b:
+            continue
+        files += 1
+        for line in difflib.unified_diff(a, b, lineterm="", n=0):
+            if line.startswith("+") and not line.startswith("+++"):
+                plus += 1
+            elif line.startswith("-") and not line.startswith("---"):
+                minus += 1
+    return {"files": files, "plus": plus, "minus": minus}
+
+
+def unified_diff(old: dict[str, bytes], new: dict[str, bytes], max_lines: int = 400) -> str:
+    out: list[str] = []
+    for name in sorted(set(old) | set(new)):
+        a = old.get(name, b"").decode(errors="replace").splitlines()
+        b = new.get(name, b"").decode(errors="replace").splitlines()
+        out.extend(difflib.unified_diff(a, b, f"a/{name}", f"b/{name}", lineterm="", n=2))
+    if len(out) > max_lines:
+        out = out[:max_lines] + [f"... ({len(out) - max_lines} more diff lines)"]
+    return "\n".join(out)
+# ==== rsi/ledger.py
+"""Append-only trial ledger plus first-order summary statistics (nAUC)."""
+
+from __future__ import annotations
+
+import threading
+import time
+from typing import Any
+
+from rsi.runs import append_jsonl, read_jsonl
+
+
+# ---------------------------------------------------------------------------
+# Ledger: one line per trial event; the latest line per trial is its state
+# ---------------------------------------------------------------------------
+
+class Ledger:
+    """Append-only trial ledger.
+
+    Statuses: ``pending`` (submitted, no result yet), ``keep`` / ``discard`` /
+    ``crash`` (karpathy_greedy vocabulary), ``adopted`` / ``rolled_back`` /
+    ``exploratory`` (naive_trial_ledger vocabulary), ``no_change``.
+    """
+
+    def __init__(self, path: str):
+        self.path = path
+        self._lock = threading.Lock()
+
+    def append(self, **rec: Any) -> dict:
+        rec.setdefault("ts", round(time.time(), 3))
+        with self._lock:
+            append_jsonl(self.path, rec)
+        return rec
+
+    def records(self) -> list[dict]:
+        return read_jsonl(self.path)
+
+    def trials(self) -> dict[int, dict]:
+        """Latest record per trial id."""
+        latest: dict[int, dict] = {}
+        for r in self.records():
+            if r.get("trial") is not None:
+                latest.setdefault(r["trial"], {}).update(r)
+        return latest
+
+    def finished(self, thread: str | None = None) -> list[dict]:
+        out = [r for r in self.trials().values() if r.get("status") != "pending"]
+        if thread is not None:
+            out = [r for r in out if r.get("thread") == thread]
+        return sorted(out, key=lambda r: r["trial"])
+
+    def tail_text(self, thread: str | None = None, n: int = 8) -> str:
+        """results.tsv-style view (dev scores only) for agent prompts."""
+        rows = self.finished(thread)[-n:]
+        lines = ["trial\tartifact\tval_bpb\tstatus\tdescription"]
+        for r in rows:
+            v = r.get("dev")
+            vs = f"{v:.6f}" if isinstance(v, (int, float)) else "-"
+            lines.append(f"{r['trial']}\t{r.get('artifact_hash', '-')}\t{vs}\t{r.get('status')}\t"
+                         f"{(r.get('hypothesis') or '')[:120]}")
+        return "\n".join(lines)
+
+
+def best_so_far_curve(values: list[float | None], lower_is_better: bool = True) -> list[float | None]:
+    best = None
+    out = []
+    for v in values:
+        if v is not None and (best is None or (v < best if lower_is_better else v > best)):
+            best = v
+        out.append(best)
+    return out
+
+
+def nauc(s0: float, values: list[float | None], s_ref: float | None) -> float | None:
+    """Normalised area under the best-so-far curve (design doc §1.2).
+
+    g(t) = (s0 - best_t) / (s0 - s_ref), averaged over t = 1..N (lower is better).
+    Returns None when s_ref is unknown or degenerate.
+    """
+    if s_ref is None or not values or s0 == s_ref:
+        return None
+    curve = best_so_far_curve([s0] + list(values))[1:]
+    gs = [(s0 - (b if b is not None else s0)) / (s0 - s_ref) for b in curve]
+    return sum(gs) / len(gs)
+# ==== rsi/context.py
+"""RunContext (INTERFACES.md): everything a Policy needs for one run."""
+
+from __future__ import annotations
+
+import json
+import os
+import pathlib
+import time
+from dataclasses import dataclass, field
+from typing import Any
+
+from rsi import events
+from rsi.ledger import Ledger
+from rsi.runs import ArtifactStore, RunDir
+
+
+@dataclass
+class RunContext:
+    run: str
+    gen: int
+    task: Any                       # rsi.tasks.base.Task
+    evald: Any                      # rsi.evald.client.EvalClient (or a test double with the same methods)
+    harness: Any                    # rsi.harness.base.Harness
+    model: str                      # gateway model name, e.g. "improver" or "improver@m1"
+    scaffold_dir: pathlib.Path | None
+    budget: dict                    # {"trials": int, "wall_s": float, "episode_s": int}
+    run_dir: pathlib.Path
+    ledger: Ledger
+    rng_seed: int = 0
+    lanes: list[int] = field(default_factory=lambda: [1])   # eval lanes the threads map onto
+    policy_cfg: dict = field(default_factory=dict)
+    t_start: float = field(default_factory=time.time)
+
+    # ---- construction -------------------------------------------------
+    @classmethod
+    def create(cls, *, run: str, runs_root: str | os.PathLike, **kw: Any) -> "RunContext":
+        rd = RunDir(str(runs_root), run).create()
+        events.register_run(run, rd.events)
+        ledger = Ledger(rd.ledger_path)
+        return cls(run=run, run_dir=pathlib.Path(rd.path), ledger=ledger, **kw)
+
+    # ---- helpers ------------------------------------------------------
+    @property
+    def rd(self) -> RunDir:
+        return RunDir(str(self.run_dir.parent), self.run)
+
+    @property
+    def artifacts(self) -> ArtifactStore:
+        return ArtifactStore(str(self.run_dir / "artifacts"))
+
+    def emit(self, ev: str, agent: str, **kw: Any) -> dict:
+        kw.setdefault("gen", self.gen)
+        return events.emit(self.run, ev, agent, **kw)
+
+    def paused(self) -> bool:
+        return (self.run_dir / "PAUSE").exists()
+
+    def elapsed(self) -> float:
+        return time.time() - self.t_start
+
+    def out_of_budget(self, n_trials_done: int) -> bool:
+        b = self.budget or {}
+        if b.get("trials") is not None and n_trials_done >= int(b["trials"]):
+            return True
+        if b.get("wall_s") is not None and self.elapsed() >= float(b["wall_s"]):
+            return True
+        return False
+
+    def save_state(self, **state: Any) -> None:
+        from rsi.runs import atomic_write_json
+
+        cur = self.load_state()
+        cur.update(state)
+        atomic_write_json(str(self.run_dir / "state.json"), cur)
+
+    def load_state(self) -> dict:
+        p = self.run_dir / "state.json"
+        if p.exists():
+            return json.loads(p.read_text())
+        return {}
+# ==== rsi/tasks/base.py
+"""Task ABC (INTERFACES.md). Implemented by rsi/tasks/nanochat (B) and rsi/tasks/muar (D)."""
+
+from __future__ import annotations
+
+import abc
+import pathlib
+
+
+class Task(abc.ABC):
+    #: registry name, e.g. "nanochat" or "muar/modadd-1"
+    name: str = ""
+    #: metric reported in eval_result, e.g. "val_bpb"
+    metric: str = ""
+    lower_is_better: bool = True
+    #: files the improver may edit, relative to start_artifact(); the orchestrator snapshots exactly these
+    editable_files: tuple[str, ...] = ("train.py",)
+    #: default dev seeds for a single screening eval (policies may override)
+    dev_seeds: tuple[int, ...] = (0,)
+
+    @abc.abstractmethod
+    def start_artifact(self) -> pathlib.Path:
+        """Directory holding the editable artifact (e.g. train.py) the run starts from."""
+
+    @abc.abstractmethod
+    def task_card(self) -> str:
+        """Text shown to the improver. Must not contain sealed information."""
+
+    def visible_feedback(self, result: dict) -> str:
+        """What the improver may see from an eval_result dict (dev metric + status + flags only)."""
+        v = result.get("value")
+        vs = f"{v:.6f}" if isinstance(v, (int, float)) else "n/a"
+        flags = ",".join(result.get("audit", {}).get("flags", [])) or "none"
+        return f"{self.metric}={vs} status={result.get('status')} audit_flags={flags}"
+
+    def better(self, a: float | None, b: float | None) -> bool:
+        """True if value a is strictly better than b (None is worst)."""
+        if a is None:
+            return False
+        if b is None:
+            return True
+        return a < b if self.lower_is_better else a > b
+
+
+_REGISTRY: dict[str, type] = {}
+
+
+def register(cls: type) -> type:
+    """Class decorator: ``@register`` makes ``get_task(cls.name)`` work."""
+    _REGISTRY[cls.name] = cls
+    return cls
+
+
+def get_task(name: str, **kw) -> Task:
+    if name not in _REGISTRY:
+        # lazy-import the known task packages so their @register runs
+        import importlib
+
+        for mod in ("rsi.tasks.nanochat", "rsi.tasks.muar"):
+            try:
+                importlib.import_module(mod)
+            except ImportError:
+                pass
+    if name not in _REGISTRY:
+        # family lookup: "muar/xyz" -> registered "muar" factory taking name=
+        fam = name.split("/", 1)[0]
+        if fam in _REGISTRY and fam != name:
+            return _REGISTRY[fam](name=name, **kw)
+        raise KeyError(f"unknown task {name!r}; registered: {sorted(_REGISTRY)}")
+    return _REGISTRY[name](**kw)

@@ -52,7 +52,7 @@ except Exception:  # pragma: no cover - only if rsi.events is broken
     _events = None
 
 RETRY_STATUSES = {429, 502, 503, 504}
-_SAFE_RUN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._\-]{0,199}$")
+_SAFE_RUN = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9._\-]{0,199}$")
 
 
 def safe_agent_file(agent: str) -> str:
@@ -266,6 +266,21 @@ class Gateway:
                 return resp.status, json.loads(raw or b"null")
             except ValueError:
                 return resp.status, {"raw": raw.decode(errors="replace")[:2000]}
+        finally:
+            conn.close()
+
+    def simple_upstream_quick(self, url: str, path: str) -> tuple[int, Any]:
+        """GET without retries (used for listings)."""
+        u = urllib.parse.urlsplit(url)
+        conn = http.client.HTTPConnection(u.hostname, u.port or 80, timeout=10)
+        hdrs = {"Authorization": f"Bearer {self.cfg.upstream_token}"} if self.cfg.upstream_token else {}
+        try:
+            conn.request("GET", path, headers=hdrs)
+            r = conn.getresponse()
+            raw = r.read()
+            return r.status, json.loads(raw or b"null")
+        except (OSError, ValueError, http.client.HTTPException):
+            return 0, None
         finally:
             conn.close()
 
@@ -557,25 +572,6 @@ class Handler(BaseHTTPRequestHandler):
             status, err = "upstream_stream_error", f"{type(e).__name__}: {e}"
         gw.record(tags, final=asm.result(), usage=asm.usage, status=status, http_status=200, ttft=ttft,
                   attempts=attempts, error=err, **common)
-
-
-def _quick(self: Gateway, url: str, path: str) -> tuple[int, Any]:
-    """GET without retries (used for listings)."""
-    u = urllib.parse.urlsplit(url)
-    conn = http.client.HTTPConnection(u.hostname, u.port or 80, timeout=10)
-    hdrs = {"Authorization": f"Bearer {self.cfg.upstream_token}"} if self.cfg.upstream_token else {}
-    try:
-        conn.request("GET", path, headers=hdrs)
-        r = conn.getresponse()
-        raw = r.read()
-        return r.status, json.loads(raw or b"null")
-    except (OSError, ValueError, http.client.HTTPException):
-        return 0, None
-    finally:
-        conn.close()
-
-
-Gateway.simple_upstream_quick = _quick
 
 
 def make_server(cfg: GatewayConfig, host: str = "127.0.0.1", port: int = 0) -> tuple[ThreadingHTTPServer, Gateway]:

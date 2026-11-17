@@ -69,6 +69,8 @@ class Policy:
     def __init__(self, cfg: dict | None = None):
         self.cfg = dict(cfg or {})
         self._trial_lock = threading.Lock()
+        self._claim_lock = threading.Lock()
+        self._claimed_unrecorded: set[int] = set()
         self._next_trial: int | None = None
 
     # ------------------------------------------------------------------
@@ -100,7 +102,29 @@ class Policy:
         return len([r for r in recs if r.get("status") != "no_change"])
 
     def should_stop(self, ctx) -> bool:
-        return ctx.paused() or ctx.out_of_budget(self.n_finished(ctx))
+        return ctx.paused() or ctx.out_of_budget(self.n_started(ctx))
+
+    def n_started(self, ctx) -> int:
+        """Trials that count against the budget: every non-baseline trial except episodes with no edit."""
+        n = 0
+        for r in ctx.ledger.trials().values():
+            if r.get("thread") != "orchestrator" and r.get("status") not in ("no_change", "baseline"):
+                n += 1
+        return n
+
+    def claim_trial(self, ctx) -> int | None:
+        """Atomically check pause/budget and allocate a trial id (None = stop). Use this in thread loops
+        so K parallel threads never overshoot ``budget.trials``."""
+        with self._claim_lock:
+            if self.should_stop(ctx) or self._claimed_unrecorded and ctx.out_of_budget(
+                    self.n_started(ctx) + len(self._claimed_unrecorded)):
+                return None
+            t = self.new_trial(ctx)
+            self._claimed_unrecorded.add(t)
+            return t
+
+    def _recorded(self, trial: int) -> None:
+        self._claimed_unrecorded.discard(trial)
 
     # ------------------------------------------------------------------ threads
     def make_threads(self, ctx, k: int, *, prefix: str = "thread", focuses: list[str] | None = None) -> list[ResearchThread]:
@@ -195,6 +219,7 @@ class Policy:
         self.clear_outbox(thread)
         ctx.ledger.append(trial=trial, thread=thread.tid, status="pending", phase="episode",
                           parent_hash=parent_hash, gen=ctx.gen)
+        self._recorded(trial)
         ctx.emit("message", "orchestrator", trial=trial, to=agent, summary=prompt_summary(prompt),
                  tokens=approx_tokens(prompt))
         episode = ctx.harness.run_episode(

@@ -50,8 +50,8 @@ class KarpathyGreedy(Policy):
             tail=ctx.ledger.tail_text(thread.tid, n=int(self.cfg.get("tail", 8))),
             extra=(self.cfg.get("program_extra", "") + "\n") if self.cfg.get("program_extra") else "")
 
-    def step(self, ctx, thread: ResearchThread) -> dict:
-        trial = self.new_trial(ctx)
+    def step(self, ctx, thread: ResearchThread, trial: int | None = None) -> dict:
+        trial = self.new_trial(ctx) if trial is None else trial
         self.write_lab_view(ctx, thread)
         prop = self.propose(ctx, thread, self.build_prompt(ctx, thread), trial,
                             budget_s=self.cfg.get("episode_s"))
@@ -70,10 +70,13 @@ class KarpathyGreedy(Policy):
         max_no_change = int(self.cfg.get("max_consecutive_no_change", 5))
         streak = 0
         per_thread = self.cfg.get("trials_per_thread")
-        while not self.should_stop(ctx):
+        while True:
             if per_thread is not None and self.n_finished(ctx, thread.tid) >= int(per_thread):
                 break
-            out = self.step(ctx, thread)
+            trial = self.claim_trial(ctx)
+            if trial is None:
+                break
+            out = self.step(ctx, thread, trial)
             streak = streak + 1 if out["status"] == "no_change" else 0
             if streak >= max_no_change:
                 ctx.emit("agent_end", thread.tid, reason=f"{streak} consecutive episodes without an edit")
