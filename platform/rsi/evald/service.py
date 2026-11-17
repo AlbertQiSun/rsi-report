@@ -495,8 +495,12 @@ class EvalService:
             if r["rc"] != 0 or not res or not res[-1].get("ok") or not os.path.isfile(outp):
                 shutil.rmtree(pd, ignore_errors=True)
                 raise RuntimeError(f"packing {split} failed (rc={r['rc']}); see {logp}")
-            os.replace(outp, path)
-            os.chmod(path, 0o600)
+            # outp is on node-local /tmp, path is on cluster FS: os.replace fails across devices (EXDEV).
+            # Copy to a temp name on the destination filesystem, then rename atomically there.
+            tmp_dst = path + ".tmp"
+            shutil.copyfile(outp, tmp_dst)
+            os.chmod(tmp_dst, 0o600)
+            os.replace(tmp_dst, path)
             shutil.rmtree(pd, ignore_errors=True)
             info = dict(res[-1])
             info.pop("k", None)

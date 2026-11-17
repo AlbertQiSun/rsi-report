@@ -4,7 +4,8 @@ import os
 
 import pytest
 
-from rsi.harness.sandbox import SandboxError, SandboxSpec, bwrap_argv, check_binds
+from rsi.harness.sandbox import (BWRAP_041_FLAGS, SandboxError, SandboxSpec, bwrap_argv, bwrap_flags,
+                                  check_binds, sandbox_env, wrap)
 from rsi.mcp_lab import filter_proxy
 from rsi.mcp_lab.server import Lab, serve
 
@@ -35,11 +36,34 @@ def test_bwrap_argv_hides_sealed_and_ssh(tmp_path):
     for s in srcs:
         assert not s.startswith(f"{R}/data"), s
         assert ".ssh" not in s and not s.startswith("/home")
-    assert "--unshare-all" in argv and "--share-net" in argv and "--clearenv" in argv
+    assert "--unshare-all" in argv and "--share-net" in argv
     assert ("--bind", f"{td}/workspace", "/work") == tuple(argv[argv.index(f"{td}/workspace") - 1:argv.index(f"{td}/workspace") + 2])
     assert argv[-2:] == ["opencode", "run"]
-    i = argv.index("--setenv")
-    assert "CUDA_VISIBLE_DEVICES" in argv[i:]
+    env = sandbox_env(spec)
+    assert env["CUDA_VISIBLE_DEVICES"] == "" and env["HOME"] == "/home/agent" and env["X"] == "1"
+
+
+def _all_specs(tmp_path):
+    td = f"{R}/runs/r1/threads/thread-0"
+    full = SandboxSpec(workspace=f"{td}/workspace", lab=str(tmp_path / "lab"), home=f"{td}/home",
+                       config_dir=f"{td}/episode_conf", ro_paths=[f"{R}/platform", f"{R}/envs/mcp"],
+                       forbidden=_forbidden(), env={"RSI_GATEWAY_KEY": "secret-agent-key"})
+    bare = SandboxSpec(workspace=f"{td}/workspace", share_net=False, forbidden=_forbidden())
+    return [full, bare]
+
+
+def test_bwrap_argv_uses_only_bwrap_041_flags(tmp_path):
+    """Cluster nodes run bubblewrap 0.4.1 (no --clearenv, --chmod, --perms, --size)."""
+    for spec in _all_specs(tmp_path):
+        argv, env, cwd = wrap(spec, ["/bin/bash", "-c", "true"], "bwrap")
+        bad = [f for f in bwrap_flags(argv) if f not in BWRAP_041_FLAGS]
+        assert not bad, f"flags unsupported by bwrap 0.4.1: {bad}"
+        assert "--" in argv and argv[argv.index("--") + 1:] == ["/bin/bash", "-c", "true"]
+        # the sandbox env goes through Popen(env=...), never through argv (no secrets visible in `ps`)
+        assert env == sandbox_env(spec)
+        assert not any("secret-agent-key" in a for a in argv)
+    for f in ("--clearenv", "--chmod", "--perms", "--size"):
+        assert f not in BWRAP_041_FLAGS
 
 
 @pytest.mark.parametrize("bad", [R, f"{R}/data", "/scratch/user", "/home/u", "/home/u/.ssh/id",

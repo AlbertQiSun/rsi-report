@@ -6,6 +6,7 @@ Inside the sandbox the agent sees:
     /home/agent    harness HOME (rw; OpenCode data, provider cache)
     /rsi           per-episode harness config (ro): opencode.json, scaffold/
     system dirs    /usr /bin /lib /lib64 /sbin /etc (ro)
+    environment    exactly sandbox_env(spec), passed to bwrap via Popen(env=...); no secrets in argv
     ro_paths       explicitly listed tool dirs (python envs, opencode binary, platform code), same path
     network        shared with the node (internet for search) unless share_net=False
 It does NOT see $HOME (so no ~/.ssh), $R/data/devval, $R/data/sealed, $R/run (tokens), other
@@ -116,21 +117,48 @@ def bwrap_argv(spec: SandboxSpec, cmd: list[str], bwrap: str = "bwrap") -> list[
         sources.append(spec.config_dir)
     thread_dirs = [x for x in (spec.workspace, spec.lab, spec.home, spec.config_dir) if x]
     check_binds(sources, spec.forbidden or default_forbidden(), allowed_inside=thread_dirs)
-    a += ["--clearenv"]
+    # No --clearenv / --setenv: bubblewrap 0.4.1 (cluster) lacks --clearenv, and --setenv would put values
+    # (e.g. RSI_GATEWAY_KEY) on bwrap's command line, visible in `ps`. Instead bwrap is started with the
+    # complete, minimal environment from sandbox_env() via Popen(env=...), and the child inherits exactly that.
+    a += ["--chdir", spec.chdir, "--"]
+    return a + list(cmd)
+
+
+# Flags of bubblewrap 0.4.1 (the version on the cluster nodes). tests/test_core_sandbox_lab.py asserts
+# that bwrap_argv() never emits anything else.
+BWRAP_041_FLAGS = frozenset("""
+--args --as-pid-1 --bind --bind-data --bind-fd --bind-try --block-fd --cap-add --cap-drop --chdir --dev
+--dev-bind --dev-bind-try --die-with-parent --dir --exec-label --file --file-label --gid --hostname --info-fd
+--json-status-fd --lock-file --mqueue --new-session --pidns --proc --remount-ro --ro-bind --ro-bind-data
+--ro-bind-fd --ro-bind-try --seccomp --setenv --share-net --symlink --sync-fd --tmpfs --uid --unsetenv
+--unshare-all --unshare-cgroup --unshare-cgroup-try --unshare-ipc --unshare-net --unshare-pid --unshare-user
+--unshare-user-try --unshare-uts --userns --userns-block-fd""".split())
+
+
+def sandbox_env(spec: SandboxSpec) -> dict[str, str]:
+    """The complete environment of the sandboxed process (nothing else from the parent leaks in)."""
     env = {"HOME": "/home/agent", "USER": "agent", "LANG": "C.UTF-8", "TMPDIR": "/tmp",
            "PATH": "/usr/local/bin:/usr/bin:/bin", "CUDA_VISIBLE_DEVICES": ""}
     env.update(spec.env)
-    for k, v in env.items():
-        a += ["--setenv", k, v]
-    a += ["--chdir", spec.chdir, "--"]
-    return a + list(cmd)
+    return env
+
+
+def bwrap_flags(argv: list[str]) -> list[str]:
+    """The option flags in a bwrap argv (everything starting with '--' before the '--' separator)."""
+    out = []
+    for a in argv[1:]:
+        if a == "--":
+            break
+        if a.startswith("--"):
+            out.append(a)
+    return out
 
 
 def wrap(spec: SandboxSpec, cmd: list[str], backend: str = "bwrap") -> tuple[list[str], dict | None, str]:
     """Return (argv, env, cwd) for subprocess. backend: bwrap | none."""
     if backend == "bwrap":
-        bw = os.environ.get("RSI_BWRAP", shutil.which("bwrap") or "bwrap")
-        return bwrap_argv(spec, cmd, bw), None, "/"
+        bw = os.environ.get("RSI_BWRAP") or shutil.which("bwrap") or "/usr/bin/bwrap"
+        return bwrap_argv(spec, cmd, bw), sandbox_env(spec), "/"
     if backend == "none":
         env = dict(os.environ)
         env.update({"HOME": spec.home or env.get("HOME", "")})
