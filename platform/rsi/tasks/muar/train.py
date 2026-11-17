@@ -163,7 +163,7 @@ def train_and_score(cfg: dict, ds: Dataset, *, seed: int, split: str, budget: fl
         for g in opt.param_groups:
             g["lr"] = lr
         loss = _loss_fn(torch, ds, model(Xtr[idx]), Ytr[idx])
-        lv = float(loss)
+        lv = float(loss.detach())
         if not math.isfinite(lv) or lv > 1e6:
             return {**base, "status": "nan", "value": None, "flag": "nan", "train_curve": curve,
                     "error": f"training loss diverged at step {step}"}

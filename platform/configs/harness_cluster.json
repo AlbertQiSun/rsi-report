@@ -1,0 +1,25 @@
+{
+  "kind": "opencode",
+  "sandbox": "bwrap",
+  "opencode_bin": "${R}/tools/opencode/current/package/bin/opencode",
+  "gateway_url": null,
+  "api_key_file": "${R}/run/agent_token",
+  "python": "/scratch/user/miniconda3/envs/rsi/bin/python",
+  "platform_dir": "${R}/code/rsi-mini",
+  "ddg_cmd": ["${R}/envs/mcp/bin/duckduckgo-mcp-server"],
+  "fetch_cmd": ["${R}/envs/mcp/bin/mcp-server-fetch"],
+  "ro_paths": [
+    "/scratch/user/miniconda3/envs/rsi",
+    "${R}/envs/mcp",
+    "${R}/envs/rsi-train",
+    "${R}/code/rsi-mini",
+    "${R}/tools/opencode"
+  ],
+  "sandbox_path": "${R}/envs/rsi-train/bin:/usr/local/bin:/usr/bin:/bin",
+  "web": true,
+  "subagents": true,
+  "export": true,
+  "context_tokens": 65536,
+  "max_output_tokens": 8192,
+  "selftest_dir": "/tmp/rsi-selftest"
+}
