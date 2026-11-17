@@ -1,0 +1,32 @@
+{
+  "kind": "claude_code",
+  "sandbox": "bwrap",
+  "claude_bin": "${R}/tools/claude/current/claude",
+  "gateway_url": null,
+  "gateway_ports_key": "gateway_agent",
+  "api_key_file": "${R}/run/agent_token",
+  "auth_env": "ANTHROPIC_AUTH_TOKEN",
+  "python": "/scratch/user/miniconda3/envs/rsi/bin/python",
+  "platform_dir": "${R}/platform",
+  "ddg_cmd": ["${R}/envs/mcp/bin/duckduckgo-mcp-server"],
+  "fetch_cmd": ["${R}/envs/mcp/bin/mcp-server-fetch"],
+  "ro_paths": [
+    "/scratch/user/miniconda3/envs/rsi",
+    "${R}/envs/mcp",
+    "${R}/envs/rsi-train",
+    "${R}/platform",
+    "${R}/tools/claude"
+  ],
+  "sandbox_path": "${R}/envs/rsi-train/bin:/usr/local/bin:/usr/bin:/bin",
+  "web": true,
+  "subagents": true,
+  "tools": "Bash,Read,Edit,Write,Glob,Grep,Agent",
+  "disallowed_tools": ["WebSearch", "WebFetch"],
+  "permission_mode": "bypassPermissions",
+  "max_turns": 40,
+  "context_tokens": 122880,
+  "max_output_tokens": 8192,
+  "max_thinking_tokens": null,
+  "bare": false,
+  "selftest_dir": "/tmp/rsi-selftest"
+}

@@ -27,6 +27,13 @@ Admin (require the main token, i.e. the vLLM API key):
   POST /rsi/load_adapter   {"base":"improver","name":"g1","path":"/abs/adapter"}
   POST /rsi/unload_adapter {"base":"improver","name":"g1"}
 Other: GET /health, GET /v1/models (union over upstreams), POST /v1/completions (proxied+logged).
+
+Anthropic Messages API (Claude Code harness): ``POST /v1/messages`` (stream and non-stream) is relayed
+to the upstream's own ``/v1/messages`` (vLLM >= 0.34 serves it natively) with the main token; the
+inbound token may come as ``x-api-key`` or as a Bearer token. Tagging, retries, ``llm_call`` events
+and trajectories work as for chat completions; the trajectory record is converted to the OpenAI chat
+shape (``rsi/gateway/anthropic.py``) and marked ``"api": "anthropic"``, so ``rsi.update`` reads it
+unchanged. ``POST /v1/messages/count_tokens`` is relayed without recording.
 """
 
 from __future__ import annotations
@@ -44,6 +51,7 @@ from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
+from . import anthropic as _anth
 from . import ports as _ports
 
 try:
@@ -99,6 +107,8 @@ class GatewayConfig:
     max_inflight: int = 64
     record: bool = True
     quiet: bool = False
+    anthropic_drop: tuple = _anth.DEFAULT_DROP   # /v1/messages: top-level keys not forwarded to vLLM
+    anthropic_thinking: str = "enabled"          # thinking.type "adaptive" -> enabled | drop | pass
 
 
 def upstreams_from_ports(d: dict) -> dict[str, str]:
@@ -240,7 +250,8 @@ class Gateway:
             sys.stderr.flush()
 
     # -- upstream HTTP with retry
-    def open_upstream(self, url: str, method: str, path: str, body: bytes | None):
+    def open_upstream(self, url: str, method: str, path: str, body: bytes | None,
+                      extra_headers: dict | None = None):
         """Return (conn, resp, attempts). resp is None if every attempt failed (error in conn)."""
         u = urllib.parse.urlsplit(url)
         deadline = time.time() + self.cfg.retry_deadline_s
@@ -251,6 +262,8 @@ class Gateway:
             hdrs = {"Content-Type": "application/json", "Accept": "application/json, text/event-stream"}
             if self.cfg.upstream_token:
                 hdrs["Authorization"] = f"Bearer {self.cfg.upstream_token}"
+            if extra_headers:
+                hdrs.update(extra_headers)
             try:
                 conn.request(method, path, body=body, headers=hdrs)
                 resp = conn.getresponse()
@@ -300,7 +313,7 @@ class Gateway:
     # -- recording
     def record(self, tags: dict, *, model: str, base: str | None, request: dict, final: dict | None,
                usage: dict | None, status: str, http_status: int, t0: float, ttft: float | None,
-               attempts: int, stream: bool, error: str | None = None) -> None:
+               attempts: int, stream: bool, error: str | None = None, extra: dict | None = None) -> None:
         latency = round(time.time() - t0, 3)
         usage = usage or {}
         pt, ct = int(usage.get("prompt_tokens") or 0), int(usage.get("completion_tokens") or 0)
@@ -314,6 +327,8 @@ class Gateway:
                    "latency_s": latency, "ttft_s": None if ttft is None else round(ttft, 3),
                    "attempts": attempts, "usage": usage, "request": request, "response": final,
                    "error": error}
+            if extra:
+                rec.update(extra)
             try:
                 append_locked(trajectory_path(self.cfg.runs_root, run, agent), rec)
             except OSError as e:
@@ -361,11 +376,16 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def _err(self, code: int, msg: str, typ: str = "gateway_error") -> None:
+        if getattr(self, "_anthropic", False):   # Anthropic clients expect {"type": "error", "error": {...}}
+            return self._json(code, {"type": "error", "error": {"type": typ, "message": msg}})
         self._json(code, {"error": {"message": msg, "type": typ, "code": code}})
 
     def _bearer(self) -> str:
+        """Inbound token: ``Authorization: Bearer <t>`` or (Anthropic clients) ``x-api-key: <t>``."""
         a = self.headers.get("Authorization", "")
-        return a[7:].strip() if a.startswith("Bearer ") else ""
+        if a.startswith("Bearer "):
+            return a[7:].strip()
+        return (self.headers.get("x-api-key") or "").strip()
 
     def _auth(self, admin: bool = False) -> bool:
         cfg = self.gw.cfg
@@ -417,6 +437,7 @@ class Handler(BaseHTTPRequestHandler):
     # -- routes
     def do_GET(self):
         p, _ = self._split_path()
+        self._anthropic = False
         if p in ("/health", "/v1/health"):
             return self._json(200, {"ok": True, "upstreams": self.gw.upstreams.table(),
                                     "stats": dict(self.gw.stats)})
@@ -445,18 +466,23 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         p, ptags = self._split_path()
+        self._anthropic = p in ("/v1/messages", "/v1/messages/count_tokens")
         if p in ("/rsi/load_adapter", "/rsi/unload_adapter"):
             return self._admin_adapter(p)
-        if p not in ("/v1/chat/completions", "/v1/completions"):
+        if p not in ("/v1/chat/completions", "/v1/completions") and not self._anthropic:
             return self._err(404, f"no route POST {p}")
         if not self._auth():
             return
         body = self._read_body()
         if body is None:
             return
+        if p == "/v1/messages/count_tokens":
+            return self._passthrough(p, body)
         tags = self._tags(ptags)
         if tags is None:
             return
+        if p == "/v1/messages":
+            return self._proxy_messages(p, body, tags)
         self._proxy(p, body, tags)
 
     def _admin_adapter(self, p: str) -> None:
@@ -587,6 +613,137 @@ class Handler(BaseHTTPRequestHandler):
                   attempts=attempts, error=err, **common)
 
 
+    # -- Anthropic Messages API
+    def _anth_headers(self) -> dict:
+        return {k: self.headers[k] for k in ("anthropic-version", "anthropic-beta") if self.headers.get(k)}
+
+    def _passthrough(self, path: str, body: dict) -> None:
+        """Relay without recording (count_tokens)."""
+        body, _ = _anth.sanitize_body(body, self.gw.cfg.anthropic_drop, self.gw.cfg.anthropic_thinking)
+        base, url = self.gw.upstreams.resolve(str(body.get("model") or ""))
+        if not url:
+            return self._err(404, f"model {body.get('model')!r} not served", "not_found_error")
+        conn, resp, _ = self.gw.open_upstream(url, "POST", path, json.dumps(body).encode(), self._anth_headers())
+        if resp is None:
+            return self._err(503, f"upstream unavailable: {conn}", "overloaded_error")
+        try:
+            raw = resp.read()
+            self.send_response(resp.status)
+            self.send_header("Content-Type", resp.getheader("Content-Type") or "application/json")
+            self.send_header("Content-Length", str(len(raw)))
+            self.end_headers()
+            self.wfile.write(raw)
+        finally:
+            conn.close()
+
+    def _proxy_messages(self, path: str, body: dict, tags: dict) -> None:
+        gw, t0 = self.gw, time.time()
+        gw.bump("requests")
+        model = str(body.get("model") or "")
+        base, url = gw.upstreams.resolve(model)
+        stream = bool(body.get("stream"))
+        body, changes = _anth.sanitize_body(body, gw.cfg.anthropic_drop, gw.cfg.anthropic_thinking)
+        try:
+            req_rec = _anth.request_to_openai(body)
+        except Exception as e:  # never fail a model call because of recording
+            req_rec = {"model": model, "messages": [], "api": "anthropic", "convert_error": repr(e)[:300]}
+        common = dict(model=model, base=base, request=req_rec, t0=t0, stream=stream)
+        extra = {"api": "anthropic", **({"compat": changes} if changes else {})}
+        if not url:
+            gw.record(tags, final=None, usage=None, status="no_route", http_status=404, ttft=None, attempts=0,
+                      error=f"no upstream for model {model!r}", extra=extra, **common)
+            return self._err(404, f"model {model!r} not served (known bases: {sorted(gw.upstreams.table())})",
+                             "not_found_error")
+        sem = gw.sem(base)
+        sem.acquire()
+        try:
+            conn, resp, attempts = gw.open_upstream(url, "POST", path, json.dumps(body).encode(),
+                                                    self._anth_headers())
+            if resp is None:
+                gw.record(tags, final=None, usage=None, status="upstream_unavailable", http_status=503, ttft=None,
+                          attempts=attempts, error=str(conn), extra=extra, **common)
+                return self._err(503, f"upstream busy/unavailable after {attempts} attempts: {conn}",
+                                 "overloaded_error")
+            try:
+                if resp.status != 200 or not stream:
+                    raw = resp.read()
+                    ttft = time.time() - t0
+                    try:
+                        obj = json.loads(raw or b"null")
+                    except ValueError:
+                        obj = None
+                    ok = resp.status == 200 and isinstance(obj, dict) and obj.get("type") != "error"
+                    self.send_response(resp.status)
+                    self.send_header("Content-Type", resp.getheader("Content-Type") or "application/json")
+                    self.send_header("Content-Length", str(len(raw)))
+                    self.end_headers()
+                    try:
+                        self.wfile.write(raw)
+                    except (BrokenPipeError, ConnectionResetError):
+                        pass
+                    if ok:
+                        gw.record(tags, final=_anth.final_from_message(obj), usage=_anth.normalize_usage(obj.get("usage")),
+                                  status="ok", http_status=200, ttft=ttft, attempts=attempts,
+                                  extra={**extra, "response_anthropic": {"content": obj.get("content"),
+                                                                         "stop_reason": obj.get("stop_reason")}},
+                                  **common)
+                    else:
+                        gw.record(tags, final=obj if isinstance(obj, dict) else None, usage=None,
+                                  status=f"http_{resp.status}", http_status=resp.status, ttft=None, attempts=attempts,
+                                  error=raw.decode(errors="replace")[:2000], extra=extra, **common)
+                    return
+                self._relay_anthropic_stream(resp, tags, common, attempts, extra)
+            finally:
+                conn.close()
+        finally:
+            sem.release()
+
+    def _relay_anthropic_stream(self, resp, tags, common, attempts, extra) -> None:
+        gw, t0 = self.gw, common["t0"]
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.close_connection = True
+        asm, ttft, status, err = _anth.AnthropicStreamAssembler(), None, "ok", None
+        try:
+            while True:
+                line = resp.readline()
+                if not line:
+                    break
+                s = line.strip()
+                if s.startswith(b"data:"):
+                    payload = s[5:].strip()
+                    try:
+                        ev = json.loads(payload) if payload else None
+                    except ValueError:
+                        ev = None
+                    if isinstance(ev, dict):
+                        asm.feed(ev)
+                        if ev.get("type") == "error":
+                            status, err = "stream_error", json.dumps(ev.get("error"))[:2000]
+                        if ttft is None and ev.get("type") == "content_block_delta":
+                            ttft = time.time() - t0
+                try:
+                    self.wfile.write(line if line.endswith(b"\n") else line + b"\n")
+                    if not s:
+                        self.wfile.flush()
+                except (BrokenPipeError, ConnectionResetError):
+                    status = "client_disconnected"
+                    break
+            if status != "client_disconnected":
+                self.wfile.flush()
+        except (OSError, http.client.HTTPException) as e:
+            status, err = "upstream_stream_error", f"{type(e).__name__}: {e}"
+        if status == "ok" and asm.stop_reason is None:
+            status, err = "incomplete_stream", "stream ended without message_delta.stop_reason"
+        gw.record(tags, final=asm.result(), usage=_anth.normalize_usage(asm.usage), status=status, http_status=200,
+                  ttft=ttft, attempts=attempts, error=err,
+                  extra={**extra, "response_anthropic": {"content": asm.content(), "stop_reason": asm.stop_reason}},
+                  **common)
+
+
 class _Server(ThreadingHTTPServer):
     """ThreadingHTTPServer without the reverse-DNS getfqdn() in server_bind (hangs on some cluster IPs)."""
 
@@ -656,6 +813,10 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--no-record", action="store_true",
                     help="write neither trajectories nor llm_call events (edge mode in front of a remote vLLM)")
     ap.add_argument("--quiet", action="store_true")
+    ap.add_argument("--anthropic-drop", default=",".join(_anth.DEFAULT_DROP),
+                    help="/v1/messages: comma list of top-level keys not forwarded ('' = forward everything)")
+    ap.add_argument("--anthropic-thinking", choices=["enabled", "drop", "pass"], default="enabled",
+                    help="/v1/messages: thinking {type: adaptive} -> enabled (budget max_tokens-1) | drop | pass")
     a = ap.parse_args(argv)
 
     ports_path = a.ports_file or _ports.default_ports_path()
@@ -674,7 +835,9 @@ def main(argv: list[str] | None = None) -> int:
     cfg = GatewayConfig(runs_root=os.path.abspath(runs_root), ports_path=ports_path, upstreams=ups,
                         upstream_token=upstream_token, inbound_token=inbound, default_run=a.default_run,
                         max_retries=a.max_retries, retry_deadline_s=a.retry_deadline_s, timeout_s=a.timeout_s,
-                        max_inflight=a.max_inflight, record=not a.no_record, quiet=a.quiet)
+                        max_inflight=a.max_inflight, record=not a.no_record, quiet=a.quiet,
+                        anthropic_drop=tuple(k for k in a.anthropic_drop.split(",") if k),
+                        anthropic_thinking=a.anthropic_thinking)
     port = a.port or _ports.free_port(a.host)
     srv, gw = make_server(cfg, a.host, port)
     port = srv.server_address[1]

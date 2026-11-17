@@ -1,12 +1,14 @@
-"""Researcher-sandbox self-test and a one-episode OpenCode smoke (run ON the cluster node).
+"""Researcher-sandbox self-test and a one-episode harness smoke (run ON the cluster node).
 
     python -m rsi.harness.selftest sandbox  --config configs/harness_cluster.json
     python -m rsi.harness.selftest episode  --config configs/harness_cluster.json [--model improver]
 
 `sandbox` runs probes inside the same bwrap sandbox a researcher thread gets and prints PASS/FAIL
 per line; exit code 0 only if every "must fail" probe failed and every "must work" probe worked.
-`episode` runs one real OpenCode episode against the gateway in a throwaway workspace and checks
-that the model edited the file and called lab submit_eval (gate G1b smoke, not the full 30-episode test).
+`episode` runs one real episode of the configured harness (kind opencode | claude_code | mini) against the
+gateway in a throwaway workspace and checks that the model edited the file and called lab submit_eval
+(gate G1b smoke, not the full 30-episode test). For claude_code it also prints the MCP servers Claude Code
+connected and where the gateway's llm_call events (with the real prompt_tokens) were written.
 """
 
 from __future__ import annotations
@@ -84,7 +86,8 @@ def cmd_sandbox(cfg: dict) -> int:
 def cmd_episode(cfg: dict, model: str) -> int:
     from rsi.harness.mini import make_harness
 
-    root = pathlib.Path(tempfile.mkdtemp(prefix="oc-smoke-", dir=cfg.get("selftest_dir") or None))
+    kind = cfg.get("kind", "opencode")
+    root = pathlib.Path(tempfile.mkdtemp(prefix=f"{kind}-smoke-", dir=cfg.get("selftest_dir") or None))
     run = f"selftest-{int(time.time())}"
     events.register_run(run, str(root / run / "events.jsonl"))
     events.emit(run, "run_start", "orchestrator", policy="selftest", task="selftest",
@@ -105,9 +108,19 @@ def cmd_episode(cfg: dict, model: str) -> int:
     out = h.run_episode(run=run, agent="thread-0", gen=0, trial=1, workspace=ws, prompt=prompt, model=model,
                         scaffold_dir=None, budget_s=int(cfg.get("selftest_budget_s", 600)))
     edited = "2e-3" in (ws / "train.py").read_text()
-    print(json.dumps({"ok": out.get("ok"), "edited": edited, "submitted": out.get("submitted"),
-                      "n_tool_calls": out.get("n_tool_calls"), "final": (out.get("final") or "")[:200],
-                      "events": str(root / run / "events.jsonl"), "trajectory": out.get("trajectory")}, indent=1))
+    report = {"ok": out.get("ok"), "edited": edited, "submitted": out.get("submitted"),
+              "n_tool_calls": out.get("n_tool_calls"), "final": (out.get("final") or "")[:200],
+              "events": str(root / run / "events.jsonl"), "trajectory": out.get("trajectory")}
+    if kind == "claude_code":
+        runs_root = os.environ.get("RSI_RUNS_ROOT") or os.path.join(
+            os.environ.get("R") or os.environ.get("RSI_ROOT") or "/scratch/user/rsi", "runs")
+        report.update({"reason": out.get("reason"), "tools_used": out.get("tools_used"),
+                       "n_tool_errors": out.get("n_tool_errors"), "n_invalid_calls": out.get("n_invalid_calls"),
+                       "mcp_servers": (out.get("init") or {}).get("mcp_servers"),
+                       "claude_code_version": (out.get("init") or {}).get("version"),
+                       "result": {k: (out.get("result") or {}).get(k) for k in ("subtype", "num_turns", "is_error")},
+                       "gateway_events": os.path.join(runs_root, run, "events.jsonl")})
+    print(json.dumps(report, indent=1, default=str))
     good = bool(out.get("ok") and edited and out.get("submitted"))
     print("EPISODE_SELFTEST", "OK" if good else "FAILED")
     return 0 if good else 1

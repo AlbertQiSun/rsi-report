@@ -218,4 +218,8 @@ def make_harness(cfg: dict) -> Harness:
         return OpenCodeHarness(cfg)
     if kind == "mini":
         return MiniHarness(cfg)
+    if kind == "claude_code":
+        from rsi.harness.claude_code import ClaudeCodeHarness
+
+        return ClaudeCodeHarness(cfg)
     raise ValueError(f"unknown harness kind {kind!r}")
