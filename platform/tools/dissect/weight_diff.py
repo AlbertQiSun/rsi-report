@@ -65,6 +65,7 @@ def main():
     a = ap.parse_args()
     A, B = Ckpt(a.a.split(",")), Ckpt(a.b.split(","))
     rows = []
+    qkv_layout = {}
     for k in sorted(A.names()):
         if a.mode == "naive_mimo" and re.search(r"self_attn\.(q|k|v)_proj\.weight$", k):
             fused = re.sub(r"(q|k|v)_proj\.weight$", "qkv_proj.weight", k)
@@ -73,8 +74,19 @@ def main():
             L = layer(k)
             q, kk, v = (A.raw(re.sub(r"(q|k|v)_proj", x, k)).shape[0] for x in ("q_proj", "k_proj", "v_proj"))
             W = B.get(fused)
-            sl = {"q_proj": W[:q], "k_proj": W[q:q + kk], "v_proj": W[q + kk:q + kk + v]}[re.search(r"(q|k|v)_proj", k).group(0)]
-            tb = sl
+            which = re.search(r"(q|k|v)_proj", k).group(0)
+            ta0 = A.get(k)
+            cands = {"concat": {"q_proj": W[:q], "k_proj": W[q:q + kk], "v_proj": W[q + kk:q + kk + v]}[which]}
+            for g in (1, 2, 4, 8, 16):  # fused layout interleaved per KV group: [q_g | k_g | v_g] x g
+                if q % g or kk % g or v % g:
+                    continue
+                qg, kg, vg = q // g, kk // g, v // g
+                Wg = W[: g * (qg + kg + vg)].reshape(g, qg + kg + vg, -1)
+                part = {"q_proj": Wg[:, :qg], "k_proj": Wg[:, qg:qg + kg], "v_proj": Wg[:, qg + kg:]}[which]
+                cands[f"grouped{g}"] = part.reshape(-1, W.shape[1])
+            best = min(cands, key=lambda c: (ta0 - cands[c]).norm().item() if cands[c].shape == ta0.shape else 1e30)
+            tb = cands[best]
+            qkv_layout[best] = qkv_layout.get(best, 0) + 1
         elif B.has(k):
             tb = B.get(k)
         else:
@@ -99,11 +111,16 @@ def main():
             agg[r["kind"]].append(r["rel_diff"])
     summary = {k: {"n": len(v), "mean_rel": sum(v) / len(v), "max_rel": max(v), "min_rel": min(v)} for k, v in sorted(agg.items())}
     only_a = sorted(set(A.names()) - set(B.names()))
-    json.dump({"a": a.a, "b": a.b, "mode": a.mode, "summary_by_kind": summary, "rows": rows,
+    json.dump({"a": a.a, "b": a.b, "mode": a.mode, "qkv_layout_votes": qkv_layout, "summary_by_kind": summary, "rows": rows,
                "only_in_a": only_a[:200], "n_only_in_a": len(only_a)}, open(a.out, "w"))
     for k, v in summary.items():
         print(f"{v['mean_rel']:9.5f} (min {v['min_rel']:.5f} max {v['max_rel']:.5f}) n={v['n']:4}  {k}")
-    print("only in A:", len(only_a), only_a[:8])
+    print("only in A:", len(only_a), only_a[:8]); print("qkv layout votes:", qkv_layout)
+    ex = [r for r in rows if ".experts." in r["name"] and "rel_diff" in r]
+    if ex:
+        import statistics as st
+        v = [r["rel_diff"] for r in ex]
+        print(f"experts: n={len(v)} median {st.median(v):.4f} | <0.001 (untouched): {sum(x < 1e-3 for x in v)} | exactly equal frac>0.99: {sum(r['frac_exact_equal'] > 0.99 for r in ex)}")
 
 
 if __name__ == "__main__":

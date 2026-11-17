@@ -71,7 +71,7 @@ def main():
             base = f"{m.group(1)}.switch_mlp.{m.group(3)}_proj"; idx = int(m.group(2))
         else:
             base = k[: -len(".weight")]; idx = None
-        if base + ".weight" not in qf:
+        if base + ".weight" not in qf or base + ".scales" not in qf:
             continue
         bits = 8 if "embed_tokens" in k else 4
         W = ref[k].get_tensor(k).float()
