@@ -190,6 +190,9 @@ def start_config_and_defects(spec: TaskSpec) -> tuple[dict, list[str]]:
         defects = [str(rng.choice(DEFECTS[str(g)])) for g in groups]
         for d in defects:
             _apply(cfg, d, rng)
+        # per-task jitter so no two tasks share a start config (keeps the leak check meaningful)
+        cfg["lr"] = float(min(3.0, max(1e-5, cfg["lr"] * float(np.exp(rng.uniform(-0.4, 0.4))))))
+        cfg["weight_decay"] = float(min(1.0, cfg["weight_decay"] * float(np.exp(rng.uniform(-0.5, 0.5)))))
         cfg = {k2: (round(v, 6) if isinstance(v, float) else v) for k2, v in cfg.items()}
         cfg = schema.validate_config(cfg)
         steps, n, _ = budget_steps(cfg, in_dim, n_out, B, MAX_STEPS)
