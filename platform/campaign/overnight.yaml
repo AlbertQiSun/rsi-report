@@ -95,7 +95,7 @@ dry_run:                     # --dry-run only: fake components, compressed clock
 flags:                       # defaults; gates and decisions flip them
   nanochat: true             # G1a/G1c: NanoChat usable at all
   nanochat_9b: true          # G1b: 9B tool calling good enough for NanoChat
-  nanochat_noisy: false      # G1a fallback: keep needs a confirming seed
+  nanochat_noisy: true       # user decision 2026-11-17 23:10: G1a sd 0.0268 > 0.02 -> keep needs a confirming seed
   muar: true                 # G2 smoke
   ladder27b_remote: true     # 27B gate on its own node
   uw1_harmful: false
@@ -157,7 +157,7 @@ steps:
   est_s: 1800                # 20 vanilla seeds over 5 lanes = 4 per lane × 7 min 〔估算〕
   cache: "{gates}/g1a_noise.json"
   deadline: "2026-11-18T00:15"
-  checks: {dev_bpb.sd: "<= 0.02", job_wall_s.max: "<= 600", status_counts.ok: ">= 18"}
+  checks: {dev_bpb.sd: "<= 0.03", job_wall_s.max: "<= 600", status_counts.ok: ">= 18"}   # sd threshold relaxed by user together with nanochat_noisy=true
   on_fail:
     wait_human_s: 1200
     fallbacks:
