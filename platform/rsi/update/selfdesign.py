@@ -294,8 +294,8 @@ include ["accepted"], min_rel_gain null, all families, calls "all", per_task_cap
 ## Answer
 Think about what in these transcripts would actually make a better researcher on new tasks, then answer
 with ONE JSON object and nothing after it:
-{{"include": [...], "min_rel_gain": ..., "task_families": [...], "calls_per_trial": ..., "per_task_cap": ...,
- "lora": {{"rank": ..., "lr": ..., "epochs": ...}}, "rationale": "<= 120 words"}}"""
+{"include": [...], "min_rel_gain": ..., "task_families": [...], "calls_per_trial": ..., "per_task_cap": ...,
+ "lora": {"rank": ..., "lr": ..., "epochs": ...}, "rationale": "<= 120 words"}"""
 
 
 def chat(gateway_url: str, model: str, messages: list, *, run: str, gen: int, token_path: str | None,
@@ -401,7 +401,7 @@ def design(spec: dict) -> dict:
         man = json.load(open(p["manifest_path"])) if p.get("manifest_path") and os.path.exists(p["manifest_path"]) else {}
         prev.append({"recipe": rec, "n_examples": man.get("n_train", 0) + man.get("n_valid", 0) if man else None,
                      "train_note": p.get("train_note"), "feedback": train_feedback({**spec, "feedback": p.get("feedback")})})
-    prompt = TASK.format(pool=summarize_pool(rows, n_calls), history=history_text(prev))
+    prompt = TASK.replace("{pool}", summarize_pool(rows, n_calls)).replace("{history}", history_text(prev))
     msgs = [{"role": "system", "content": SYSTEM}, {"role": "user", "content": prompt}]
     attempts = []
     recipe, n = None, None
