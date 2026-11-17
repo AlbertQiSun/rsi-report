@@ -54,7 +54,9 @@ fi
 export CUDA_DEVICE_ORDER=PCI_BUS_ID
 export CUDA_VISIBLE_DEVICES=$GPU
 export PYTHONPATH=$SRC${PYTHONPATH:+:$PYTHONPATH}
-export HF_HOME=${HF_HOME:-$R/hf}
+# The login profile may export HF_HOME/TRANSFORMERS_CACHE for other projects; always use the RSI cache.
+export HF_HOME=${RSI_HF_HOME:-$R/hf}
+unset TRANSFORMERS_CACHE HF_HUB_CACHE HF_DATASETS_CACHE
 export HF_HUB_OFFLINE=${HF_HUB_OFFLINE:-1}          # weights were downloaded by UV1
 export TOKENIZERS_PARALLELISM=false
 export PYTORCH_CUDA_ALLOC_CONF=${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}

@@ -13,7 +13,8 @@
 # Exit codes of the scheduler: 0 done or STOP, 2 refused, 3 another instance running.
 set -u
 export R=${R:-/scratch/user/rsi}
-export HF_HOME=${HF_HOME:-$R/hf}
+export HF_HOME=${RSI_HF_HOME:-$R/hf}   # ignore a profile-wide HF_HOME (other projects)
+unset TRANSFORMERS_CACHE HF_HUB_CACHE HF_DATASETS_CACHE
 PY=${PY:-/scratch/user/miniconda3/envs/rsi/bin/python}
 CODE=${RSI_CODE:-$(cd "$(dirname "$0")/.." && pwd)}      # platform/ checkout on the cluster
 CONFIG=${CONFIG:-$CODE/campaign/overnight.yaml}

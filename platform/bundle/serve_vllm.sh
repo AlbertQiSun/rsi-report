@@ -60,7 +60,9 @@ PY=${RSI_SERVE_PY:-$ENV_DIR/bin/python}
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 PLATFORM=$(cd "$HERE/.." && pwd)
 export PYTHONPATH="$PLATFORM${PYTHONPATH:+:$PYTHONPATH}"
-export HF_HOME=${HF_HOME:-$R/hf}
+# The login profile may export HF_HOME/TRANSFORMERS_CACHE for other projects; always use the RSI cache.
+export HF_HOME=${RSI_HF_HOME:-$R/hf}
+unset TRANSFORMERS_CACHE HF_HUB_CACHE HF_DATASETS_CACHE
 export HF_HUB_OFFLINE=${HF_HUB_OFFLINE:-1}
 TOKEN_FILE=${RSI_TOKEN_FILE:-$R/run/token}
 PORTS=${RSI_PORTS:-$R/run/ports.json}
