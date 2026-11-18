@@ -964,6 +964,102 @@ steps:
   also: [{name: "SD2 vs M0", arm: mu_sd2, base: mu_a0a}, {name: "SD2 vs M1", arm: mu_sd2, base: mu_a2}]
   label: "U_sd round 2: redesigned recipe after train-task feedback vs round 1"
 
+# ── U_sd round 3 (recursive; added 11-18 10:35 at the user's request): the NEW heart SD1 designs the recipe.
+# It sees exactly the prompt M0 saw in round 2 (pool D_0 + round-1 recipe + round-1 train feedback), so
+# SD3 vs SD2 isolates "designer = SD1" vs "designer = M0". Training still starts from the base 9B weights on
+# pool D_0 (same as every U_sd round); only the designer differs. Control: random recipe of the same size (sdr3).
+- id: sd_design3
+  phase: 3
+  kind: selfdesign
+  needs: [mu_sd1t, sft_sd1, sd_design1, lora_sd1]
+  after: [mu_d0p, mu_d1, sd_design2]
+  sources: [mu_g0]
+  model: improver@sd1
+  round: 3
+  gen: 2
+  previous: [{design: sd_design1, sft: sft_sd1, fb_this: mu_sd1t, fb_m0: mu_d0p, fb_m1: mu_d1}]
+  est_s: 600
+  timeout_s: 3600
+
+- id: sft_sd3
+  phase: 3
+  kind: sft_recipe
+  needs: [sd_design3]
+  sources: [mu_g0]
+  recipe_from: sd_design3
+  min_examples: 40
+  est_s: 300
+
+- id: sft_sdr3
+  phase: 3
+  kind: sft_recipe
+  needs: [sd_design3, sft_sd3]
+  sources: [mu_g0]
+  recipe_from: sd_design3
+  random_placebo: true
+  match_n_of: sft_sd3
+  min_examples: 40
+  est_s: 300
+
+- id: lora_sd3
+  phase: 3
+  kind: lora
+  needs: [sft_sd3]
+  after: [lora_sd2]
+  holds: [gpu5]
+  lane: 5
+  remote: {jobid: 10000002, srun_args: ["--gres=gpu:a100:3", "--cpus-per-task=8", "--mem=64G"]}   # lanes 4/5 live on node-b
+  gen: 2
+  jobs: [{name: sd3, sft: sft_sd3, recipe_from: sd_design3}]
+  est_train_s: 2700
+  train_timeout_s: 4500
+
+- id: lora_sdr3
+  phase: 3
+  kind: lora
+  needs: [sft_sdr3]
+  after: [lora_sdr2]
+  holds: [gpu4]
+  lane: 4
+  remote: {jobid: 10000002, srun_args: ["--gres=gpu:a100:3", "--cpus-per-task=8", "--mem=64G"]}   # lanes 4/5 live on node-b
+  gen: 2
+  jobs: [{name: sdr3, sft: sft_sdr3, recipe_from: sd_design3}]
+  est_train_s: 2700
+  train_timeout_s: 4500
+
+- id: mu_sd3
+  phase: 3
+  kind: muar_arm
+  needs: [lora_sd3]
+  splits: heldout
+  seeds: heldout
+  model: improver@sd3
+  gen: 2
+  est_s: 2400
+
+- id: mu_sdr3
+  phase: 3
+  kind: muar_arm
+  needs: [lora_sdr3]
+  splits: heldout
+  seeds: heldout
+  model: improver@sdr3
+  gen: 2
+  est_s: 2400
+
+- id: dec_sd3
+  phase: 3
+  kind: decision
+  needs: [mu_sd3, mu_sd2]
+  after: [mu_sdr3, mu_a0b]
+  arm: mu_sd3
+  base: mu_sd2               # designer SD1 vs designer M0, same information
+  placebo: mu_sdr3
+  aa: [mu_a0a, mu_a0b]
+  also: [{name: "SD3 vs M0", arm: mu_sd3, base: mu_a0a}, {name: "SD3 vs SD1", arm: mu_sd3, base: mu_sd1},
+         {name: "SD3 vs M1", arm: mu_sd3, base: mu_a2}]
+  label: "U_sd round 3 (recursive): recipe designed by SD1 vs by M0 (SD2), same feedback"
+
 # ═══════ NanoChat continue-from-frontier (CFF): 4 arms × 3 reps × 12 trials, one lane per run ═══════
 # Every arm starts from a* = the best artifact of nc_g0 with the same nc_g0 history; only the improver
 # differs. Each run is pinned to one lane; arms rotate over lanes between reps (lane counterbalancing).
