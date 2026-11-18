@@ -1,90 +1,63 @@
-# 6. 给 Ling 的计划
+# 6. 面向 Ling 的研究方向
 #### 正文（中文）
 
-### 目标
+如果目标是让 Ling 逐代提高研发能力，系统就必须把“下一代是否更善于改进”作为训练信号，而不能只优化某个下游任务的终点分数。本报告的实验表明，经验笔记和模型自选配方都可能把直觉上合理的筛选规则带入更新过程，却没有提高后继者的改进速度。一个可行方向，是让 Ling 提出更新方案，再用独立评估直接检验更新后的 Ling 是否更善于研发。
 
-这份计划提议让 Ling 的每一代由上一代 Ling 训练出来，而且训练数据怎么筛选、训练配方怎么定、研发环境和评测怎么写，也由上一代 Ling 改写。人不再逐代决定"怎么改进"。按 Tang 等人的判据，改进机制进入系统内部、并可以被系统自身改写，正是从一般的迭代改进走到 RSI 的那一步 [T-24]。
+Ling-3.0-flash 已具备开展 agent 研究的基础：它是总参数 124B、激活参数 5.1B 的 MoE 模型，并在训练中使用了大量交互环境 [S-10]。蚂蚁的 Ring-1T 强化学习系统和 AReaL 异步训练框架提供了可衔接的训练基础设施 [S-12, S-13]。研究问题因此不是再搭一套孤立工具，而是如何把研发任务、更新机制和代际评估纳入一个有可验证反馈的学习循环。
 
-本报告的实验给出了这条管线最重要的设计依据。固定的改进者确实能带来一阶改进 [LOG E]；但模型凭直觉设计自己的更新时会出错：它写给自己的经验笔记让改进速度下降了约三分之一，它给训练数据加的一条"只学显著提升"的筛选规则，让后继模型的改进速度分从 0.60 降到 0.39 [`decisions/decisions_1235.json`；`decisions/decisions_1420.json`]。所以这条管线的核心不是让模型"想"出更好的更新，而是让它"测"出更好的更新，并把这种测量和选择的能力训练进模型本身。
+[[figure:fig6-pipeline｜图 20　Ling 的研究闭环。Ling 承担研发任务，并提出对训练数据、更新配方、研究环境或评测的修改。候选修改先在独立评估中比较；只有当它产生的后继在留出任务上表现出更高改进速度，修改才进入下一轮训练。代际结果同时训练 Ling 设计更新的能力。谱系档案保留模型权重、机制版本和相应评估结果。]]
 
-### Ling 的起点
+### 把改进能力纳入训练目标
 
-Ling-3.0-flash 是总参数 124B、激活 5.1B 的 MoE 模型，训练中已经用了 "10,000+ interactive training environments" 做 agent 的闭环执行 [S-10]。蚂蚁已有万亿参数规模的 RL 系统 Ring-1T，以及异步 RL 框架 AReaL，后者已经支持 Ling 的模型结构 [S-12；S-13]。训练、rollout 和环境的基础都已经存在。缺的是把它们连成一个闭环、并由 Ling 自己驱动这个闭环的那一层。
+闭环包含四个相互依赖的部分：
 
-### 管线
-
-[[figure:fig6-pipeline｜图 20　Ling 的自我改进管线。当前一代 Ling 以研究 agent 的身份做研发任务，同时向机制仓库提交对"怎么改进"的改动；每一个改动先在小模型试验场里成对实测，测的是训练出的后继当改进者时的改进速度；胜出的配方交给更新引擎训练出下一代 Ling，下一代接手同一个仓库。实测结果同时作为奖励，训练 Ling 设计更新的能力（虚线）。谱系档案保存所有祖先，按实测的改进速度分配研究工作。]]
-
-管线由六个部分组成。每一部分都是 Ling 可以改写的对象，或者是 Ling 改写其他部分时用来判断对错的依据。
-
-| 组件 | 作用 | 依据 |
+| 部分 | 作用 | 设计要点 |
 |---|---|---|
-| 机制仓库 | 所有决定"怎么改进"的东西：数据筛选和合成规则、训练配方、研发环境、评测、训练代码。全部版本化，全部可以由 Ling 改写 | Tang 等人的判据 [T-24]；DGM 让 agent 改写自己的代码库 [M-03] |
-| 研发环境池 | 持续产生研发任务：训练脚本、推理 kernel、数据处理、配方设计。"设计下一次更新"本身也是其中一个环境 | SEAL 用外层 RL 训练模型生成自己的微调数据 [M-13]；Absolute Zero 让模型自己出题 [M-21] |
-| 封存评估器 | 给每次尝试打分，Ling 看不到它的代码和封存数据；信号越硬的任务越先交给 Ling | 本报告实验的封存评估器 [`platform_design.md` §5.1]；信号硬度的文献梳理 [`lit_signal_hardness.md`] |
-| 小模型试验场 | 在与 Ling 同架构的小模型上成对实测每一个改动：加这条规则训练一次，不加训练一次，再把两个后继换上去当改进者，比较改进速度 | 本报告第 4 节的测量方法；第 7 节中同一配方重训只差 0.003 [`decisions/decisions_1420.json`] |
-| 更新引擎 | 按胜出的配方训练下一代 Ling，以带验证器的 RL 为主 | Ring-1T 的 RL 系统 [S-12] |
-| 谱系档案 | 保存所有祖先的权重和仓库版本，按实测的改进速度决定从哪一代分叉、给哪一代更多研究工作 | DGM 的开放式档案 [M-03]；HGM 按后代表现选择父代 [M-04] |
+| 研发任务池 | 提供训练代码、推理内核、数据处理和配方设计等任务 | 覆盖不同类型，保留未见任务评估 |
+| 机制仓库 | 版本化保存数据规则、训练配方、环境、评估器和代码 | Ling 可以提出修改，每项修改可追溯 |
+| 独立评估 | 测量修改后的后继能否更快改进 | 采用固定预算、成对任务和封存测试数据 |
+| 更新与谱系 | 根据通过评估的方案训练后继，并保留每代状态 | 记录权重、机制版本、数据来源及代际表现 |
 
-### 三条设计原则
+关键测量沿用第 4 节的思路：训练候选后继，再把它放回改进者的位置，与对照模型在留出研发任务上比较。这样，Ling 获得的反馈对应于“这项修改是否让后继更善于改进”，而非“提案听起来是否合理”或“某个单次基准是否变好”。DGM 的自修改框架、SEAL 的外层强化学习，以及 AIDE² 的 ignition 测试分别提供了可借鉴的组件 [M-03, M-13, E-28]。
 
-**一、改进过程的每一个改动都先实测，再采用。** 本报告的实验里，三个设计者（原始的 9B 模型、微调后的 9B 模型和 27B 模型）都没能事先判断一条筛选规则的好坏，其中两个主动加入了有害的规则 [LOG E]。同时，同一份配方换随机种子重训，结果只差 0.003 [`decisions/decisions_1420.json`]。这说明配方的好坏凭直觉判断不了，但实测既便宜又准确。管线因此把每一个对"怎么改进"的改动都当作一次成对实验：有它和没有它各训练一个后继，测哪个后继当改进者更快。
+### 从可验证任务起步
 
-**二、成功和失败都记录，并用失败做对照。** 本报告中，用成功记录和用失败记录微调出的模型几乎没有差别 [`decisions/decisions_1235.json`]；Spurious Rewards 也发现，随机奖励能带来真实奖励大部分的提升 [M2-07]。没有失败对照，管线会把"换了一份训练数据"误当成"学会了什么"。所以轨迹库完整保留被采纳、被拒绝和非法的尝试，试验场的每一组实验都带一个用失败记录或随机记录训练的对照。
+初期可优先选择评估信号明确的任务，例如推理内核正确性与速度、固定预算下的训练配方。Ling 先提出一个机制改动，系统在同一任务与预算下构造有改动和无改动的后继，测量二者的改进速度差。只有可复现的正向结果才进入训练数据；失败和无效提案同样保留，作为后续对照。随着测量可靠性提高，再逐步开放更复杂的机制修改，包括环境和评测设计。
 
-**三、把"设计下一次更新"训练成一种能力。** 本报告中，未经训练的设计者无法选出更好的配方；SEAL 的自我编辑在经过外层 RL 训练后，成功率从 20% 提高到 72.5% [M-13]。管线把配方设计做成一个 RL 环境：Ling 提出配方，试验场训练出后继并实测它当改进者的速度，这个速度就是 Ling 的奖励。这样，Ling 改进的不只是下一代的权重，也是它自己"设计改进"的能力，这正是"越改越会改"所要求的那一层 [T-12]。
+训练目标也应从“提出更新”推进到“提出可被验证的更新”。把每项提案的后继表现作为外层学习信号，可以训练 Ling 选择数据、配方和研究环境的能力。奖励应来自独立任务上的代际比较，以避免模型只优化自己编写的评估器。
 
-### 从哪里开始
+### 何时称得上进展
 
-管线先从信号最硬的两个环开始：推理 kernel（正确性可以逐位核对，速度可以直接测量）和固定预算下的训练配方（验证损失可以直接比较）[`lit_signal_hardness.md`]。在这两个环上，Ling 先作为固定的改进者跑一阶循环，把机制仓库、试验场和谱系档案接通。接着把"设计下一次更新"的环境接上，让 Ling 开始改写自己的训练配方和数据规则。最后把仓库的写权限放开到研发环境和评测本身。
-
-基础设施也进入这个循环。本报告通宵运行中记录的 12 次故障，没有一次由系统自己诊断修复 [LOG G]。管线把每一次故障的现场都保存成一个新的研发环境，让 Ling 学会维护驱动自己改进的那套系统。
-
-### 怎样知道它在起作用
-
-每一代都用第 4 节的方法测量：把新一代 Ling 放回改进者的位置，在留出的研发任务上测它的改进速度，并和上一代、和失败对照比较。只要这条代际曲线持续向上，Ling 就在"越改越会改"，这就是 RSI 在发生。
+Ling 的每一代都应在固定预算的留出研发任务上与前代和对照比较，并报告任务配对的改进速度、独立训练重复和不确定区间。若后继模型持续更快地改进，而这一优势跨任务和随机种子复现，才有证据支持“越改越会改”。任务得分、生成的研究记录数量或模型自述，都不能替代这一测量。
 
 #### Text (English)
 
-### Goal
+If the goal is for Ling to improve its research ability across generations, training must reward whether the next generation becomes a better improver, rather than only optimizing the endpoint score of a downstream task. The experiments in this report show that lessons notes and self-designed recipes can carry intuitive but harmful filters into an update without increasing successor improvement speed. One direction is to let Ling propose updates, then test directly whether the resulting Ling is better at research.
 
-This plan proposes that each generation of Ling be trained by the previous one, and that the previous Ling also rewrite how training data is filtered, how training recipes are set, and how research environments and evaluations are written. People no longer decide, generation by generation, how improvement happens. By the criterion of Tang et al., moving the improvement mechanism inside the system, where the system itself can rewrite it, is exactly the step from ordinary iterative improvement to RSI [T-24].
+Ling-3.0-flash has a foundation for agent research: it is a MoE model with 124B total and 5.1B active parameters, trained with a large set of interactive environments [S-10]. Ant's Ring-1T reinforcement-learning system and AReaL asynchronous training framework offer infrastructure that could support the loop [S-12, S-13]. The research question is not how to assemble another isolated toolchain, but how to connect research tasks, update mechanisms, and generational evaluation through verifiable feedback.
 
-This report's experiments supply the most important design input. A fixed improver does deliver first-order improvement [LOG E]; but a model that designs its own update by intuition gets it wrong. The lessons note it wrote for itself cut its improvement speed by about a third, and one "learn only from clear gains" filter it added to its training data lowered the successor's improvement-speed score from 0.60 to 0.39 [`decisions/decisions_1235.json`; `decisions/decisions_1420.json`]. So the core of this pipeline is not to have the model *think up* a better update, but to have it *measure* one, and to train that ability to measure and choose into the model itself.
+[[figure:fig6-pipeline｜Figure 20. Ling's research loop. Ling works on R&D tasks and proposes changes to training data, update recipes, research environments, or evaluations. Candidate changes are tested independently, a change advances only when its successor improves faster on held-out tasks. Generational results also train Ling's ability to design updates. The lineage archive retains model weights, mechanism versions, and evaluation results.]]
 
-### Where Ling starts
+### Include improvement ability in the training objective
 
-Ling-3.0-flash is a MoE model with 124B total and 5.1B active parameters, already trained with "10,000+ interactive training environments" for closed-loop agent execution [S-10]. Ant already runs Ring-1T, an RL system at trillion-parameter scale, and the asynchronous RL framework AReaL, which already supports Ling's architecture [S-12; S-13]. The foundations for training, rollout and environments are in place. What is missing is the layer that joins them into one loop and lets Ling drive that loop itself.
+The loop has four interdependent parts:
 
-### The pipeline
-
-[[figure:fig6-pipeline｜Figure 20. Ling's self-improvement pipeline. The current Ling works as a research agent on R&D tasks and commits changes to "how to improve" into the mechanism repository; each change is first tested in pairs in the small-model testbed, measuring the improvement speed of the resulting successor when it acts as the improver; winning recipes go to the update engine, which trains the next Ling, and the next Ling takes over the same repository. The measured results also serve as the reward that trains Ling's ability to design updates (dashed line). The lineage archive keeps every ancestor and assigns research work by measured improvement speed.]]
-
-The pipeline has six parts. Each is either something Ling can rewrite, or the ground truth Ling uses to judge its rewrites of the other parts.
-
-| Component | Role | Basis |
+| Part | Role | Design point |
 |---|---|---|
-| Mechanism repository | Everything that decides how improvement happens: data filtering and synthesis rules, training recipes, research environments, evaluations, training code. All versioned, all rewritable by Ling | Tang et al.'s criterion [T-24]; DGM lets the agent rewrite its own codebase [M-03] |
-| Research environment pool | A steady supply of R&D tasks: training scripts, inference kernels, data processing, recipe design. "Design the next update" is itself one of these environments | SEAL trains a model with outer-loop RL to generate its own fine-tuning data [M-13]; Absolute Zero has the model set its own problems [M-21] |
-| Sealed evaluator | Scores every attempt; Ling cannot see its code or sealed data; tasks with harder signals are handed to Ling first | This report's sealed evaluator [`platform_design.md` §5.1]; review of signal hardness [`lit_signal_hardness.md`] |
-| Small-model testbed | Tests every change in pairs on small models with Ling's architecture: train once with the rule, once without, then swap both successors in as improvers and compare their speed | The measurement method of §4; in §7, retraining the same recipe moved the score by only 0.003 [`decisions/decisions_1420.json`] |
-| Update engine | Trains the next Ling with the winning recipes, mainly by RL with verifiers | Ring-1T's RL system [S-12] |
-| Lineage archive | Keeps the weights and repository version of every ancestor; decides by measured improvement speed which generation to branch from and which gets more research work | DGM's open-ended archive [M-03]; HGM selects parents by descendants' performance [M-04] |
+| R&D task pool | Supplies tasks in training code, inference kernels, data processing, and recipe design | Cover varied task types and retain held-out evaluations |
+| Mechanism repository | Versions data rules, training recipes, environments, evaluators, and code | Ling can propose changes, and each change is traceable |
+| Independent evaluation | Measures whether a change produces a faster-improving successor | Use fixed budgets, paired tasks, and sealed test data |
+| Update and lineage | Trains successors from evaluated changes and retains each generation | Record weights, mechanism versions, data sources, and generational results |
 
-### Three design principles
+The key measurement follows Section 4: train a candidate successor, put it back in the improver role, and compare it with a control on held-out R&D tasks. Ling's feedback then answers whether a change made the successor better at improving, rather than whether the proposal sounded plausible or a single benchmark improved. DGM's self-modification framework, SEAL's outer-loop reinforcement learning, and AIDE²'s ignition test offer components to build on [M-03, M-13, E-28].
 
-**1. Every change to the improvement process is measured before it is adopted.** In this report, none of the three designers (the original 9B model, the fine-tuned 9B model and the 27B model) could tell in advance whether a filter rule would help, and two of them added a harmful one [LOG E]. Meanwhile, retraining the same recipe with a new seed changed the result by only 0.003 [`decisions/decisions_1420.json`]. Recipes cannot be judged by intuition, but measuring them is cheap and precise. The pipeline therefore treats every change to how improvement happens as a paired experiment: train one successor with it and one without, and measure which is faster as an improver.
+### Start with verifiable tasks
 
-**2. Record successes and failures, and use failures as the control.** In this report, models fine-tuned on successful and on failed records were almost identical [`decisions/decisions_1235.json`]; Spurious Rewards likewise found that random rewards deliver most of the gain of the true reward [M2-07]. Without a failure control, the pipeline would mistake "trained on a different dataset" for "learned something". The trajectory store therefore keeps accepted, rejected and invalid attempts alike, and every experiment in the testbed carries a control trained on failed or random records.
+Early tasks can prioritize clear evaluation signals, such as inference-kernel correctness and speed or training recipes under a fixed budget. Ling proposes a mechanism change, and the system constructs successors with and without that change under the same task and budget. Only reproducible positive results advance to training, failed and ineffective proposals remain available as controls. As measurement becomes reliable, the system can open more complex mechanisms to modification, including research environments and evaluation design.
 
-**3. Make "designing the next update" a trainable skill.** In this report, untrained designers could not pick better recipes; SEAL's self-edits rose from 20% to 72.5% success after outer-loop RL training [M-13]. The pipeline turns recipe design into an RL environment: Ling proposes a recipe, the testbed trains a successor and measures its speed as an improver, and that speed is Ling's reward. Ling then improves not only the next generation's weights but its own ability to design improvements, which is the layer that "gets better at getting better" requires [T-12].
+The objective should move from "propose an update" to "propose an update that survives evaluation." Using successor performance as an outer-loop learning signal can train Ling to choose data, recipes, and research environments. The reward should come from generational comparisons on independent tasks, so the model cannot simply optimize an evaluator that it wrote itself.
 
-### Where to begin
+### What would count as progress
 
-The pipeline starts with the two loops that have the hardest signals: inference kernels, where correctness can be checked bit for bit and speed measured directly, and training recipes at a fixed budget, where validation loss can be compared directly [`lit_signal_hardness.md`]. On these two loops Ling first runs as a fixed improver, connecting the mechanism repository, the testbed and the lineage archive. Next the "design the next update" environment is connected, and Ling starts rewriting its own training recipes and data rules. Finally, write access to the repository is opened up to the research environments and the evaluations themselves.
+Each Ling generation should be compared with its predecessor and a control on held-out R&D tasks under a fixed budget, with task-paired improvement-speed scores, independent training runs, and uncertainty intervals. Repeated gains across tasks and random seeds would support the claim that Ling is getting better at improving. Task scores, the number of generated research records, and the model's own description of its progress cannot replace this measurement.
 
-Infrastructure enters the loop as well. None of the 12 failures logged in this report's overnight run was diagnosed and fixed by the system itself [LOG G]. The pipeline saves the state of every failure as a new research environment, so that Ling learns to maintain the system that drives its own improvement.
-
-### How to tell it is working
-
-Every generation is measured with the method of §4: put the new Ling back in the improver's seat, measure its improvement speed on held-out R&D tasks, and compare it with the previous generation and with a failure control. As long as that curve across generations keeps rising, Ling is getting better at getting better, and that is RSI happening.

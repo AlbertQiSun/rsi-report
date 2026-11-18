@@ -18,7 +18,8 @@ TEXT_EXT = {".md", ".py", ".sh", ".yaml", ".yml", ".json", ".jsonl", ".txt", ".l
             ".astro", ".mjs", ".js", ".ts", ".css", ".html", ".csv", ".tex"}
 SKIP_PARTS = {"node_modules", "dist", ".astro", "__pycache__", ".git", "archive", "other", "rec", "flint-int4",
               "first-steps-toward-automated-ai-research", "publish", ".claude"}
-SKIP_NAMES = {"package-lock.json", "content.json", "search-index.json", "report_full.md"}
+SKIP_NAMES = {"package-lock.json", "content.json", "search-index.json", "report_full.md", "EvidenceBubble.astro",
+              "build_search_index.py"}
 MAX_FILE_BYTES = 1_500_000      # larger files: only the first part is indexed
 MAX_LINES_PER_CHUNK = 30
 MAX_CHUNK_CHARS = 1800

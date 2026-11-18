@@ -85,6 +85,48 @@ const BRANCH = import.meta.env.PUBLIC_REPO_BRANCH || 'main';
       return out;
     }
 
+
+    // Bilingual glossary of this project's terms: a query word pulls in its Chinese / English / internal-code variants.
+    const GLOSS = [
+      ['第三轮', 'round 3', 'round3', 'sd3', 'dec_sd3', 'sd_design3'], ['第二轮', 'round 2', 'sd2', 'dec_sd2', 'sd_design2'],
+      ['第一轮', 'round 1', 'sd1', 'dec_sd1', 'sd_design1'], ['重训', '换种子', 'replicate', 'seed', 'sd1b', 'dec_sd1b'],
+      ['27b', 'qwen3.8', 'ladder', 'sd27', 'dec_sd27'], ['设计者', 'designer', 'selfdesign', 'recipe'],
+      ['配方', 'recipe', 'lora_args', 'selfdesign'], ['微调', 'fine-tune', 'finetune', 'lora', 'sft'],
+      ['变差', '下降', '有害', 'worse', 'harmful', 'drop', 'degrad'], ['变好', '提升', '更快', 'better', 'faster', 'improve'],
+      ['经验笔记', '笔记', 'lessons', 'us_lessons', 'dec_us', 'scaffold'], ['安慰剂', '对照', 'placebo', 'control', 'm1p'],
+      ['多给数据', 'more data', 'm2c', 'm3c', 'd0p'], ['原始模型', 'original', 'base', 'm0', 'a0a'],
+      ['第一代', 'generation 1', 'gen1', 'm1', 'dec_g1', 'lora_g1'], ['第二代', 'generation 2', 'gen2', 'm2', 'dec_g2'],
+      ['第三代', 'generation 3', 'gen3', 'm3', 'dec_g3'], ['后继', 'successor', 'generation'],
+      ['改进速度', '改进速度分', 'improvement speed', 'nauc', 'auc'], ['二阶', 'second-order', 'second order', 'delta2', 'Δ₂'],
+      ['一阶', 'first-order', 'first order'], ['噪声', '随机波动', 'noise', 'a/a', 'aa', 'variance'],
+      ['置信区间', 'confidence interval', 'ci', 'bootstrap'], ['显著', 'significant', 'p_signflip', 'signflip'],
+      ['截断', '输出上限', 'truncat', 'finish_reason', 'max_output_tokens', 'length'], ['时限', '时间上限', 'time limit', 'lora_time_limit_min', '55'],
+      ['故障', '人工干预', 'failure', 'incident', 'error', 'restart'], ['调度', '调度器', 'scheduler', 'campaign'],
+      ['评测', '评估', 'eval', 'evald', 'evaluator', 'sealed'], ['留出', '未见过', 'held-out', 'heldout'],
+      ['训练任务', 'train tasks', 'train'], ['续跑', '从最好版本继续', 'continue-from-best', 'cf_', 'frontier'],
+      ['专家', 'experts', 'moe'], ['路由', 'router', 'routing'], ['算力', 'gpu hours', 'compute', 'budget'],
+      ['身份', 'identity', 'chat_template'], ['思考', 'reasoning', 'think', 'thinking'], ['蒸馏', 'distill', 'teacher'],
+      ['普查', 'census', 'probes'], ['漂移', 'drift'], ['权重', 'weights', 'safetensors'],
+    ].map((g) => g.map((w) => w.toLowerCase()));
+    const STOP = new Set(['为什么', '什么', '怎么', '怎样', '如何', '是否', '有没有', '哪些', '哪个', '多少', '的', '了', '吗', '呢', '是', '在', '和', '与',
+      'why', 'what', 'how', 'which', 'is', 'are', 'was', 'were', 'the', 'a', 'an', 'of', 'to', 'in', 'on', 'for', 'did', 'does', 'do', 'get', 'got', 'and', 'or']);
+    function queryTokens(q) {
+      let text = q.toLowerCase();
+      for (const w of STOP) if (/[㐀-鿿]/.test(w) && w.length > 1) text = text.split(w).join(' ');
+      const extra = [];
+      for (const g of GLOSS) if (g.some((w) => text.includes(w))) extra.push(...g);
+      const base = [];
+      for (const m of text.matchAll(/[a-z0-9]+(?:[._-][a-z0-9]+)*/g)) if (!STOP.has(m[0])) base.push(m[0]);
+      for (const run of text.matchAll(/[㐀-鿿]+/g)) {     // queries: CJK bigrams only (unigrams are noise)
+        const r = run[0];
+        if (r.length === 1) { if (!STOP.has(r)) base.push(r); continue; }
+        for (let i = 0; i + 1 < r.length; i++) base.push(r.slice(i, i + 2));
+      }
+      const wts = new Map(base.map((t) => [t, 1]));
+      for (const w of extra) for (const t of tokens(w)) if (!wts.has(t)) wts.set(t, 0.35);
+      return wts;
+    }
+
     function load() {
       if (loading) return loading;
       status.textContent = zh() ? '正在载入索引……' : 'Loading index…';
@@ -104,15 +146,20 @@ const BRANCH = import.meta.env.PUBLIC_REPO_BRANCH || 'main';
     }
 
     function search(q) {
-      const qt = [...new Set(tokens(q))], N = DOCS.length, k1 = 1.2, b = 0.75, scored = [];
+      const qw = queryTokens(q), qt = [...qw.keys()], N = DOCS.length, k1 = 1.2, b = 0.75, scored = [];
       for (const d of DOCS) {
         let s = 0;
         for (const t of qt) {
           const f = d.tf.get(t); if (!f) continue;
           const df = DF.get(t), idf = Math.log(1 + (N - df + 0.5) / (df + 0.5));
-          s += idf * (f * (k1 + 1)) / (f + k1 * (1 - b + b * d.len / AVG));
+          s += qw.get(t) * idf * (f * (k1 + 1)) / (f + k1 * (1 - b + b * d.len / AVG));
         }
-        if (s > 0) scored.push([s, d]);
+        if (s > 0) {
+          const path = IDX.files[d.c[0]];
+          const prior = path.startsWith('report/tools/') || path.startsWith('report/site/') ? 0.45
+            : ({ report: 1.3, log: 1.15, doc: 1.1, data: 1.0, code: 0.9 }[d.c[3]] || 1);
+          scored.push([s * prior, d]);
+        }
       }
       scored.sort((a, b) => b[0] - a[0]);
       return { qt, hits: scored.slice(0, 8) };
