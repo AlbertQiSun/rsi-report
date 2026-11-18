@@ -1060,6 +1060,102 @@ steps:
          {name: "SD3 vs M1", arm: mu_sd3, base: mu_a2}]
   label: "U_sd round 3 (recursive): recipe designed by SD1 vs by M0 (SD2), same feedback"
 
+# ── Two follow-ups (user 11-18 12:55; REPORT_LOG H9): why did round 3 get worse?
+# (a) replicate: SD1's recipe and SFT set trained again with LoRA seed 1 -> run-to-run noise of one fine-tune.
+# (b) bigger designer: Qwen3.8-27B ("ladder-27b") writes the recipe from exactly the round-2 prompt; the 9B is
+#     still the model that gets trained. Isolates "is the designer too small?". No random-recipe control (two
+#     GPU lanes only); compare with SD2 (designer M0) and SD3 (designer SD1).
+- id: lora_sd1b
+  phase: 3
+  kind: lora
+  needs: [sft_sd1, sd_design1]
+  after: [lora_sd3]
+  holds: [gpu5]
+  lane: 5
+  remote: {jobid: 10000002, srun_args: ["--gres=gpu:a100:3", "--cpus-per-task=8", "--mem=64G"]}   # lanes 4/5 live on node-b
+  gen: 1
+  jobs: [{name: sd1b, sft: sft_sd1, recipe_from: sd_design1, extra_lora_args: "--seed 1"}]
+  est_train_s: 3300
+  train_timeout_s: 4500
+
+- id: mu_sd1b
+  phase: 3
+  kind: muar_arm
+  needs: [lora_sd1b]
+  splits: heldout
+  seeds: heldout
+  model: improver@sd1b
+  gen: 1
+  est_s: 2400
+
+- id: dec_sd1b
+  phase: 3
+  kind: decision
+  needs: [mu_sd1b, mu_sd1]
+  after: [mu_a0b, mu_sd3]
+  arm: mu_sd1b
+  base: mu_sd1               # same recipe, same data, different LoRA seed: run-to-run noise
+  aa: [mu_a0a, mu_a0b]
+  also: [{name: "SD1b vs M0", arm: mu_sd1b, base: mu_a0a}, {name: "SD1b vs SD3", arm: mu_sd1b, base: mu_sd3}]
+  label: "Replicate: round-1 recipe retrained with seed 1 vs the original round-1 run"
+
+- id: sd_design27
+  phase: 3
+  kind: selfdesign
+  needs: [mu_sd1t, sft_sd1, sd_design1]
+  after: [mu_d0p, mu_d1, sd_design3]
+  sources: [mu_g0]
+  model: ladder-27b
+  round: 2
+  gen: 2
+  previous: [{design: sd_design1, sft: sft_sd1, fb_this: mu_sd1t, fb_m0: mu_d0p, fb_m1: mu_d1}]
+  est_s: 900
+  timeout_s: 7200
+
+- id: sft_sd27
+  phase: 3
+  kind: sft_recipe
+  needs: [sd_design27]
+  sources: [mu_g0]
+  recipe_from: sd_design27
+  min_examples: 40
+  est_s: 300
+
+- id: lora_sd27
+  phase: 3
+  kind: lora
+  needs: [sft_sd27]
+  after: [lora_sdr3]
+  holds: [gpu4]
+  lane: 4
+  remote: {jobid: 10000002, srun_args: ["--gres=gpu:a100:3", "--cpus-per-task=8", "--mem=64G"]}   # lanes 4/5 live on node-b
+  gen: 2
+  jobs: [{name: sd27, sft: sft_sd27, recipe_from: sd_design27}]
+  est_train_s: 2700
+  train_timeout_s: 4500
+
+- id: mu_sd27
+  phase: 3
+  kind: muar_arm
+  needs: [lora_sd27]
+  splits: heldout
+  seeds: heldout
+  model: improver@sd27
+  gen: 2
+  est_s: 2400
+
+- id: dec_sd27
+  phase: 3
+  kind: decision
+  needs: [mu_sd27, mu_sd2]
+  after: [mu_a0b, mu_sd3]
+  arm: mu_sd27
+  base: mu_sd2               # designer 27B vs designer M0 (9B), same prompt and feedback
+  aa: [mu_a0a, mu_a0b]
+  also: [{name: "SD27 vs SD3 (designer 27B vs SD1)", arm: mu_sd27, base: mu_sd3},
+         {name: "SD27 vs M0", arm: mu_sd27, base: mu_a0a}]
+  label: "Bigger designer: recipe written by Qwen3.8-27B vs by the 9B (round-2 prompt)"
+
 # ═══════ NanoChat continue-from-frontier (CFF): 4 arms × 3 reps × 12 trials, one lane per run ═══════
 # Every arm starts from a* = the best artifact of nc_g0 with the same nc_g0 history; only the improver
 # differs. Each run is pinned to one lane; arms rotate over lanes between reps (lane counterbalancing).

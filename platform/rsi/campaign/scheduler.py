@@ -810,6 +810,8 @@ class LoraStep(Step):
                         rp = (self.c.steps[job["recipe_from"]].outputs() or {}).get("recipe_path")
                         env = dict(env or self.c.child_env())
                         env["LORA_ARGS"] = lora_args(json.load(open(rp)))
+                        if job.get("extra_lora_args"):         # e.g. "--seed 1" for a replicate of the same recipe
+                            env["LORA_ARGS"] += " " + str(job["extra_lora_args"])
                         self.c.log(f"{self.id}: {name} LORA_ARGS={env['LORA_ARGS']}")
                     self.st["proc"] = self.c.procs.launch(argv, log=self.step_dir(f"train-{name}.txt"),
                                                           result=self.step_dir(f"train-{name}.json"), env=env)
