@@ -1,0 +1,83 @@
+# Citable keys for report/pdf/main.tex
+
+Use \cite{KEY}. Ledger keys of the four releases collapse to REL-RF / REL-FL / REL-NV / REL-AX.
+
+- `LOG-E` — RSI-mini experiment log, section E (results)
+- `replay-final-ovn1118b-nc-g0-events-jsonl` — Event log of the Qwen3.5-9B research run on NanoChat (proposals, evaluations, decisions)
+- `decisions-decisions-1235-json` — Effects, 95% CIs and permutation tests for every comparison (exported 11-18 12:35, incl. round 3 of the self-designed recipe)
+- `decisions-decisions-0905-json` — Effects, 95% CIs and permutation tests for every comparison (exported 11-18 09:05)
+- `decisions-decisions-1420-json` — Effects, 95% CIs and permutation tests for every comparison (exported 11-18 14:20, incl. the two follow-up experiments)
+- `T-03` — Yudkowsky (2008), "Recursive Self-Improvement", LessWrong
+- `T-12` — Yampolskiy (2015), "From Seed AI to Technological Singularity via Recursively Self-Improving Software", arXiv 1502.06512
+- `T-24` — Tang, Ma, Li & Yuan (2026), "Generalized Agent Iteration: One Formal Framework for Iterative Policy Improvement and Recursive Self-Improvement", arXiv 2609.1340
+- `model-dissection-apex-naive-md` — Weight diffs and behaviour fingerprints of Apex and Naive
+- `flint-reverse-engineering-md` — Reverse engineering of Flint's pre- and post-training
+- `T-23` — ICLR 2026 Workshop on AI with Recursive Self-Improvement（Rio de Janeiro，2026-04-26；组织者包括 Zhuge、Zeng、Schmidhuber 等）
+- `T-05` — Schmidhuber (2003/2006), "Gödel Machines: Self-Referential Universal Problem Solvers Making Provably Optimal Self-Improvements", arXiv cs/0309048 v5；相关版本发表于 LNC
+- `T-04` — Yudkowsky (2013), "Intelligence Explosion Microeconomics", MIRI Technical Report 2013-1
+- `T-09` — Chalmers (2010), "The Singularity: A Philosophical Analysis", *Journal of Consciousness Studies* 17:7–65
+- `T-16` — Besiroglu, Erdil & Ho (2024), "Do the Returns to Software R&D Point Towards a Singularity?", Epoch AI
+- `T-17` — Eth & Davidson (2025), "Will AI R&D Automation Cause a Software Intelligence Explosion?", Forethought
+- `M2-01` — Mind the Gap（Song, Zhang, Eisenach, Kakade, Foster, Ghai 2024，arXiv 2412.02674）
+- `M-20` — SPIN：Chen, Deng, Yuan, Ji, Gu 2024
+- `M-17` — ReST-EM：Singh, Co-Reyes, Agarwal, et al. 2023
+- `E-28` — Srikanth, Zhao, Xu, Wu, Jiang, Recursive self-improvement of AI research agents（AIDE²，Weco AI，2026-09）
+- `decisions-decisions-0958-json` — Effects, 95% CIs and permutation tests for every comparison (exported 11-18 09:58, incl. round 1 of the self-designed recipe)
+- `decisions-decisions-1019-json` — Effects, 95% CIs and permutation tests for every comparison (exported 11-18 10:19, incl. both rounds of the self-designed recipe)
+- `T-01` — I. J. Good (1965), "Speculations Concerning the First Ultraintelligent Machine", *Advances in Computers* 6
+- `S-01` — Valentin F. Turchin (1986), "The concept of a supercompiler", ACM Transactions on Programming Languages and Systems 8(3): 292–325
+- `T-07` — Hall (2007), "Self-improving AI: an Analysis", *Minds & Machines* 17:249–259
+- `T-08` — Mahoney (2008, rev. 2010), "A Model for Recursively Self Improving Programs"
+- `X-24` — Weco AI 博客，网址路径为 first-evidence-of-recursive-self-improvement（页面标题未逐字核对）。文中引用的 Level 2 原话 "ignition, when the system improves its own ability to improve itself"
+- `E-27` — Wang et al. (incl. Schmidhuber), Huxley-Gödel Machine（2025-10）
+- `M-01` — STOP：Zelikman, Lorch, Mackey, Kalai 2023
+- `T-13` — Benthall (2017), "Don't Fear the Reaper: Refuting Bostrom's Superintelligence Argument", arXiv 1702.08495
+- `T-18` — Davidson & Houlden (2025), "How quick and big would a software intelligence explosion be?", Forethought
+- `REL-RF` — Recursive Superintelligence. First steps toward automated AI research. Company blog, 2026
+- `REL-NV` — NaiveAI. Naive-N0.5-Flash: Building frontier AI with AI. Company research page, 2026
+- `REL-FL` — Recursive Superintelligence. Introducing Flint. Company release, 2026
+- `REL-AX` — Apex Intelligence. Introducing Apex-35B-V1.0. Company release, 2026
+- `LOG-B` — Research log, section B (first-hand checks of open weights and code)
+- `LOG-F` — Research log, section F (reverse engineering of the other models)
+- `census-compare-json` — Summary of the reasoning-style census across four models
+- `flint-dissection-md` — Local dissection of Flint: parameter inventory and MoE routing
+- `reading-04-Apex35B-md` — Reading guide to Apex-35B: the AI4AI section and the Sokoban figure caption
+- `E-01` — Wijk et al., RE-Bench（METR，2024-11；v2 2025-05）
+- `E-03` — Chan et al., MLE-bench（OpenAI，2024-10）
+- `E-04` — Starace et al., PaperBench（OpenAI，2025-04）
+- `E-23` — Cunningham, Rush, Whitfill, Wijk, Independent Assessment of AI R&D Acceleration at Anthropic in October 2026（METR，2026-11-05）
+- `M-14` — STaR：Zelikman, Wu, Mu, Goodman 2022
+- `M-03` — Darwin Gödel Machine (DGM)：Zhang, Hu, Lu, Lange, Clune 2025
+- `M-04` — Huxley-Gödel Machine (HGM)：Wang, Piękos, Nanbo, …, Schmidhuber 2025
+- `E-25` — Zelikman et al., STOP: Self-Taught Optimizer（2023-10；v3 2024-08）
+- `E-26` — Zhang et al., Darwin Gödel Machine（2025-05；v3 2026-03）
+- `lit-rsi-academic-md` — How academia treats RSI: summary of a review of about 96 sources
+- `E-33` — Von Arx, Chan, Barnes, Recent Frontier Models Are Reward Hacking（METR，2025-06）
+- `LOG-A` — Research log, section A (framing and literature check on signal hardness)
+- `replay-final-nc-g0-final-summary-txt` — Summary of the Qwen3.5-9B research run on NanoChat
+- `platform-design-md` — RSI-mini platform design: definitions, decision rules and controls
+- `platform-build-plan-md` — RSI-mini build plan and decision record
+- `L-28` — Karpathy, 2026（README 引言标注 2026-03）, *autoresearch*, GitHub
+- `LOG-H` — RSI-mini experiment log, section H (discussion and checks)
+- `deploy-second-order-md` — RSI-mini deployment notes: LoRA training and loading for the second-order runs
+- `M2-04` — Shumailov et al.（Nature 631:755–759, 2024；本次实际阅读的是 arXiv v3 "The Curse of Recursion"）
+- `M-13` — SEAL：Zweiger, Pari, Guo, Akyürek, Kim, Agrawal 2025
+- `decisions-cf-analysis-json` — Continue-from-best: drops and comparisons for four improvers, 3 runs each
+- `LOG-G` — RSI-mini experiment log, section G (record of human interventions)
+- `M-25` — ExpeL：Zhao, Huang, Xu, Lin, Liu, Huang 2023
+- `M2-10` — Huang et al., "LLMs Cannot Self-Correct Reasoning Yet"（ICLR 2024，arXiv 2310.01798）
+- `M-23` — Reflexion：Shinn, Cassano, Berman, Gopinath, Narasimhan, Yao 2023
+- `M-27` — ACE：Zhang, Hu, Upasani, et al. 2025
+- `M-26` — Memory management / experience-following：Xiong, Lin, Xie, He, Liu, Tang, Lakkaraju, Xiang 2025
+- `M-28` — Self-generated in-context examples：Sarukkai, Xie, Fatahalian 2025
+- `M-24` — Voyager：Wang, Xie, Jiang, et al. 2023
+- `M2-07` — Spurious Rewards（Shao et al. 2025，arXiv 2506.10947）
+- `M2-02` — Sharpening（Huang, Block, Foster, Rohatgi, Zhang, Simchowitz, Ash, Krishnamurthy 2024，arXiv 2412.01951）
+- `M-18` — Self-Rewarding LMs：Yuan, Pang, Cho, Li, Sukhbaatar, Xu, Weston 2024
+- `M-19` — Meta-Rewarding：Wu, Yuan, Golovneva, Xu, Tian, Jiao, Weston, Sukhbaatar 2024
+- `M2-05` — Gerstgrasser et al. 2024
+- `S-10` — inclusionAI, Ling-3.0-flash 模型卡与 config（Hugging Face，2026）
+- `S-12` — Ling Team, "Every Step Evolves: Scaling Reinforcement Learning for Trillion-Scale Thinking Model"（Ring-1T），arXiv:2510.18855
+- `S-13` — Fu et al., "AReaL: A Large-Scale Asynchronous Reinforcement Learning System for Language Reasoning"，arXiv:2505.24298；仓库 inclusionAI/AReaL
+- `M-21` — Absolute Zero (AZR)：Zhao, Wu, Yue, et al. 2025
+- `lit-signal-hardness-md` — Literature review on signal hardness and the order of automation

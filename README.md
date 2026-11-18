@@ -5,6 +5,8 @@
 1. **报告**：对四份声称"用 AI 改进 AI"的公开发布（Recursive *First Steps Toward Automated AI Research*、Recursive *Flint*、NaiveAI *Naive-N0.5-Flash*、Apex Intelligence *Apex-35B*）做的取证分析，并对照学术文献讨论什么才算 RSI。报告以静态网站形式发布（`report/site/`），中英双语。
 2. **RSI-mini**：一个小型实验平台（`platform/`），用来直接测量一个问题：**把模型换成"被自己改进过的后继模型"之后，它做研究会不会更快**（二阶改进）。
 
+**在线阅读**：网页版 https://albertqisun.github.io/rsi-report/ （右下角"查证据"可在全部公开材料里检索原文）；PDF 版 [`report/pdf/main.pdf`](report/pdf/main.pdf)（NeurIPS 2026 preprint 格式，英文，10 页）。
+
 *English summary.* A forensic review of four public "AI improving AI" releases, plus RSI-mini, a small platform that directly measures second-order improvement: does a successor model, fine-tuned on its own research, improve things faster than the original? The report is a bilingual (Chinese/English) static site built from `report/`.
 
 ## 主要结论
@@ -22,6 +24,7 @@
 ```
 .
 ├── report/                 报告
+│   ├── pdf/                PDF 版（LaTeX 源文件、图、编译好的 main.pdf；tectonic main.tex）
 │   ├── sections/           各节正文（中文 + English），网站以此为准
 │   ├── draft.md            摘要卡片与早期草稿（build_content.py 读取）
 │   ├── references*.md      参考文献表（由 build_references.py 从 research/ 抽取）
