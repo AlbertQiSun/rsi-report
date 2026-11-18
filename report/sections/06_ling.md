@@ -1,7 +1,7 @@
 # 6. 面向 Ling 的研究方向
 #### 正文（中文）
 
-如果目标是让 Ling 逐代提高研发能力，系统就必须把“下一代是否更善于改进”作为训练信号，而不能只优化某个下游任务的终点分数。本报告的实验表明，经验笔记和模型自选配方都可能把直觉上合理的筛选规则带入更新过程，却没有提高后继者的改进速度。一个可行方向，是让 Ling 提出更新方案，再用独立评估直接检验更新后的 Ling 是否更善于研发。
+如果目标是让 Ling 逐代提高研发能力，训练信号需要直接反映下一代是否更善于改进，并与下游任务表现区分开。本报告的实验表明，经验笔记和模型自选配方都可能把直觉上合理的筛选规则带入更新过程，却没有提高后继者的改进速度。一个可行方向，是让 Ling 提出更新方案，再用独立评估直接检验更新后的 Ling 是否更善于研发。
 
 Ling-3.0-flash 已具备开展 agent 研究的基础：它是总参数 124B、激活参数 5.1B 的 MoE 模型，并在训练中使用了大量交互环境 [S-10]。蚂蚁的 Ring-1T 强化学习系统和 AReaL 异步训练框架提供了可衔接的训练基础设施 [S-12, S-13]。关键在于把研发任务、更新机制和代际评估纳入一个有可验证反馈的学习循环。
 
@@ -32,7 +32,7 @@ Ling 的每一代都应在固定预算的留出研发任务上与前代和对照
 
 #### Text (English)
 
-If the goal is for Ling to improve its research ability across generations, training must reward whether the next generation becomes a better improver, rather than only optimizing the endpoint score of a downstream task. The experiments in this report show that lessons notes and self-designed recipes can carry intuitive but harmful filters into an update without increasing successor improvement speed. One direction is to let Ling propose updates, then test directly whether the resulting Ling is better at research.
+If the goal is for Ling to improve its research ability across generations, training must reward whether the next generation becomes a better improver, alongside downstream task performance. The experiments in this report show that lessons notes and self-designed recipes can carry intuitive but harmful filters into an update without increasing successor improvement speed. One direction is to let Ling propose updates, then test directly whether the resulting Ling is better at research.
 
 Ling-3.0-flash has a foundation for agent research: it is a MoE model with 124B total and 5.1B active parameters, trained with a large set of interactive environments [S-10]. Ant's Ring-1T reinforcement-learning system and AReaL asynchronous training framework offer infrastructure that could support the loop [S-12, S-13]. The key is to connect research tasks, update mechanisms, and generational evaluation through verifiable feedback.
 

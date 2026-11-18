@@ -7,7 +7,7 @@ RSI 的关键在于改进循环是否回到改进者自身。Yudkowsky 将“系
 
 RSI 的定义还涉及两个不同问题：改进机制由谁控制，以及改进是否逐代加速。Tang 等人把前者作为形式边界：当数据选择、训练配方或其他改进机制仍位于 agent 外部时，过程属于一般迭代策略改进（GPI）；当系统能够内化并改写这些机制时，才符合他们对 RSI 的定义 [T-24]。这一界定回答“什么过程算 RSI”，并不预先回答它是否有效。
 
-后一个问题需要测量。Yampolskiy 将自我修改分为自我修改、弱自我改进和递归自我改进三个层次 [T-12]。其中最高一层不只是把自身参数调好，而是“越改越会改”：系统能持续改进产生后继者的方法。Chalmers 将相关能力称为 self-amplifying capacity，即产生下一代的能力本身得到放大 [T-09]。若训练流程仍由人预先固定，自蒸馏或自博弈的任务分数衡量的是一阶表现，不是改进机制的递归增长〔推断〕[T-08, T-12, T-24]。
+后一个问题需要测量。Yampolskiy 将自我修改分为自我修改、弱自我改进和递归自我改进三个层次 [T-12]。最高一层要求系统“越改越会改”，持续提升产生后继者的方法。Chalmers 将相关能力称为 self-amplifying capacity，即产生下一代的能力本身得到放大 [T-09]。若训练流程仍由人预先固定，自蒸馏或自博弈的任务分数衡量的是一阶表现，不是改进机制的递归增长〔推断〕[T-08, T-12, T-24]。
 
 本文据此把证据分成两层。**一阶改进**是固定的研究者在给定预算内改善目标。Qwen3.5-9B 将 NanoChat 验证损失从 1.4152 降至 1.2308，就是一阶成果 [LOG E]。**跨代改进**则比较继任研究者在相同任务和预算下的改进速度。若后继者的改进速度高于前代，才有直接证据表明改进能力正在增长。Weco 把这一门槛称为 ignition，AIDE² 据此设计了 ignition test [X-24, E-28]；HGM 则用后代表现衡量 agent 产生更强后继者的能力，并称其为 metaproductivity [E-27]。
 
@@ -25,7 +25,7 @@ The central question is whether the improvement loop returns to the improver. Yu
 
 Two questions are often bundled together: who controls the improvement mechanism, and whether improvement accelerates across generations. Tang et al. use the first as a formal boundary. When data selection, training recipes, or other mechanisms remain outside the agent, the process is general iterative policy improvement (GPI). It qualifies as RSI under their definition only when the system can internalize and rewrite those mechanisms [T-24]. This definition answers what counts as RSI, not whether RSI works.
 
-Effectiveness requires a separate measurement. Yampolskiy distinguishes self-modification, weak self-improvement, and recursive self-improvement [T-12]. The highest level requires more than tuning the system. The system must get better at getting better by improving how it produces successors. Chalmers calls the relevant capacity self-amplifying capacity, the capacity to produce the next generation [T-09]. Thus, self-distillation or self-play may improve a target task, but if people fix the training process in advance, task scores alone do not establish stronger recursive improvement (an inference) [T-08, T-12, T-24].
+Effectiveness requires a separate measurement. Yampolskiy distinguishes self-modification, weak self-improvement, and recursive self-improvement [T-12]. The highest level requires more than tuning the system. The system must get better at getting better by improving how it produces successors. Chalmers calls the relevant capacity self-amplifying capacity, the capacity to produce the next generation [T-09]. When people fix the training process in advance, self-distillation and self-play task scores support a first-order performance claim. Recursive improvement requires evidence that the update mechanism itself strengthens across generations (an inference) [T-08, T-12, T-24].
 
 This report separates the evidence into two levels. **First-order improvement** occurs when a fixed researcher improves a target under a given budget. Qwen3.5-9B lowering NanoChat validation loss from 1.4152 to 1.2308 is a first-order result [LOG E]. **Cross-generation improvement** compares the speed of successor researchers under the same tasks and budget. A successor that improves faster than its predecessor provides direct evidence that the capacity to improve is growing. Weco calls this threshold ignition, and AIDE² operationalizes it with an ignition test [X-24, E-28]. HGM measures an agent's capacity to produce stronger descendants as metaproductivity [E-27].
 

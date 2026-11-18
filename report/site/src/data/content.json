@@ -147,7 +147,7 @@
     },
     {
      "type": "p",
-     "html": "后一个问题需要测量。Yampolskiy 将自我修改分为自我修改、弱自我改进和递归自我改进三个层次<sup class=\"fn\"><a href=\"#ref-4\">4</a></sup>。其中最高一层不只是把自身参数调好，而是“越改越会改”：系统能持续改进产生后继者的方法。Chalmers 将相关能力称为 self-amplifying capacity，即产生下一代的能力本身得到放大<sup class=\"fn\"><a href=\"#ref-11\">11</a></sup>。若训练流程仍由人预先固定，自蒸馏或自博弈的任务分数衡量的是一阶表现，不是改进机制的递归增长<span class=\"tag\">推断</span><sup class=\"fn\"><a href=\"#ref-12\">12</a>,<a href=\"#ref-4\">4</a>,<a href=\"#ref-5\">5</a></sup>。",
+     "html": "后一个问题需要测量。Yampolskiy 将自我修改分为自我修改、弱自我改进和递归自我改进三个层次<sup class=\"fn\"><a href=\"#ref-4\">4</a></sup>。最高一层要求系统“越改越会改”，持续提升产生后继者的方法。Chalmers 将相关能力称为 self-amplifying capacity，即产生下一代的能力本身得到放大<sup class=\"fn\"><a href=\"#ref-11\">11</a></sup>。若训练流程仍由人预先固定，自蒸馏或自博弈的任务分数衡量的是一阶表现，不是改进机制的递归增长<span class=\"tag\">推断</span><sup class=\"fn\"><a href=\"#ref-12\">12</a>,<a href=\"#ref-4\">4</a>,<a href=\"#ref-5\">5</a></sup>。",
      "pending": false
     },
     {
@@ -184,7 +184,7 @@
     },
     {
      "type": "p",
-     "html": "Effectiveness requires a separate measurement. Yampolskiy distinguishes self-modification, weak self-improvement, and recursive self-improvement<sup class=\"fn\"><a href=\"#ref-4\">4</a></sup>. The highest level requires more than tuning the system. The system must get better at getting better by improving how it produces successors. Chalmers calls the relevant capacity self-amplifying capacity, the capacity to produce the next generation<sup class=\"fn\"><a href=\"#ref-11\">11</a></sup>. Thus, self-distillation or self-play may improve a target task, but if people fix the training process in advance, task scores alone do not establish stronger recursive improvement (an inference)<sup class=\"fn\"><a href=\"#ref-12\">12</a>,<a href=\"#ref-4\">4</a>,<a href=\"#ref-5\">5</a></sup>.",
+     "html": "Effectiveness requires a separate measurement. Yampolskiy distinguishes self-modification, weak self-improvement, and recursive self-improvement<sup class=\"fn\"><a href=\"#ref-4\">4</a></sup>. The highest level requires more than tuning the system. The system must get better at getting better by improving how it produces successors. Chalmers calls the relevant capacity self-amplifying capacity, the capacity to produce the next generation<sup class=\"fn\"><a href=\"#ref-11\">11</a></sup>. When people fix the training process in advance, self-distillation and self-play task scores support a first-order performance claim. Recursive improvement requires evidence that the update mechanism itself strengthens across generations (an inference)<sup class=\"fn\"><a href=\"#ref-12\">12</a>,<a href=\"#ref-4\">4</a>,<a href=\"#ref-5\">5</a></sup>.",
      "pending": false
     },
     {
@@ -763,7 +763,7 @@
     },
     {
      "type": "h3",
-     "html": "自生成数据不等于学会判断"
+     "html": "成功记录没有教会模型更好的研究判断"
     },
     {
      "type": "p",
@@ -777,7 +777,7 @@
     },
     {
      "type": "h3",
-     "html": "一阶指标上升，不等于改进能力上升"
+     "html": "任务得分与改进能力是两种结果"
     },
     {
      "type": "p",
@@ -829,7 +829,7 @@
     },
     {
      "type": "h3",
-     "html": "Self-generated data does not imply learned judgment"
+     "html": "Accepted records did not teach research judgment"
     },
     {
      "type": "p",
@@ -843,7 +843,7 @@
     },
     {
      "type": "h3",
-     "html": "A higher first-order score is not a higher capacity to improve"
+     "html": "Task scores and improvement ability measure different outcomes"
     },
     {
      "type": "p",
@@ -877,7 +877,7 @@
    "zh": [
     {
      "type": "p",
-     "html": "如果目标是让 Ling 逐代提高研发能力，系统就必须把“下一代是否更善于改进”作为训练信号，而不能只优化某个下游任务的终点分数。本报告的实验表明，经验笔记和模型自选配方都可能把直觉上合理的筛选规则带入更新过程，却没有提高后继者的改进速度。一个可行方向，是让 Ling 提出更新方案，再用独立评估直接检验更新后的 Ling 是否更善于研发。",
+     "html": "如果目标是让 Ling 逐代提高研发能力，训练信号需要直接反映下一代是否更善于改进，并与下游任务表现区分开。本报告的实验表明，经验笔记和模型自选配方都可能把直觉上合理的筛选规则带入更新过程，却没有提高后继者的改进速度。一个可行方向，是让 Ling 提出更新方案，再用独立评估直接检验更新后的 Ling 是否更善于研发。",
      "pending": false
     },
     {
@@ -962,7 +962,7 @@
    "en": [
     {
      "type": "p",
-     "html": "If the goal is for Ling to improve its research ability across generations, training must reward whether the next generation becomes a better improver, rather than only optimizing the endpoint score of a downstream task. The experiments in this report show that lessons notes and self-designed recipes can carry intuitive but harmful filters into an update without increasing successor improvement speed. One direction is to let Ling propose updates, then test directly whether the resulting Ling is better at research.",
+     "html": "If the goal is for Ling to improve its research ability across generations, training must reward whether the next generation becomes a better improver, alongside downstream task performance. The experiments in this report show that lessons notes and self-designed recipes can carry intuitive but harmful filters into an update without increasing successor improvement speed. One direction is to let Ling propose updates, then test directly whether the resulting Ling is better at research.",
      "pending": false
     },
     {

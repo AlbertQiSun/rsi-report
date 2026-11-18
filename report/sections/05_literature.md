@@ -9,13 +9,13 @@
 
 [[figure:fig5-memory｜图 18　加入反思、经验或记忆后的相对表现变化。不同研究使用的任务和指标不同，图中比较各自相对变化，不比较绝对分数。橙色表示下降，蓝色表示提升 [M-25, M2-10, M-27, M-26, M-23, M-28, `decisions/decisions_1235.json`]。]]
 
-### 自生成数据不等于学会判断
+### 成功记录没有教会模型更好的研究判断
 
 第一代成功记录微调模型与失败记录安慰剂几乎相同。这个结果与 Spurious Rewards 的发现相近：在 MATH-500 上，随机奖励取得了真实奖励大部分的提升 [M2-07]。Mind the Gap 也发现，一些表面上的首轮自我改进来自格式遵循，而非任务能力本身 [M2-01]。模型在更新后变好，仍需通过对照判断它是否学到了有效反馈中的信息。数据量、格式和行为激活都可能带来表面提升。
 
 被否决记录构成安慰剂对照，用来区分训练造成的变化与有效研究信号带来的收益。在本实验中，成功记录微调没有带来更快的研究进展。
 
-### 一阶指标上升，不等于改进能力上升
+### 任务得分与改进能力是两种结果
 
 许多自训练研究报告的是模型在目标任务上的表现。SPIN 和 Self-Rewarding 等工作展示了迭代训练后部分指标继续上升，同时也报告边际收益递减或其他任务上的回退 [M-20, M-18]。这些结果有价值，这些结果回答特定任务表现如何变化，尚未直接检验更新后的模型能否更快改进下一项任务。
 
@@ -37,13 +37,13 @@ Useful memories can be checked against the environment and matched to the task a
 
 [[figure:fig5-memory｜Figure 18. Relative performance after adding reflection, experience, or memory. Tasks and metrics differ across studies, so the figure compares relative changes rather than absolute scores. Orange indicates a drop and blue a gain [M-25, M2-10, M-27, M-26, M-23, M-28, `decisions/decisions_1235.json`].]]
 
-### Self-generated data does not imply learned judgment
+### Accepted records did not teach research judgment
 
 The first successor fine-tuned on accepted records performed almost identically to the rejected-record placebo. This resembles Spurious Rewards, where random rewards captured most of the gain of true rewards on MATH-500 [M2-07]. Mind the Gap likewise found that some apparent first-round self-improvement came from better format following rather than task ability [M2-01]. A score increase after an update does not show that the model learned useful information from feedback. Data volume, formatting, and behavior activation require controls.
 
 Rejected records serve as a placebo, separating generic effects of training from gains due to useful research signals. Fine-tuning on accepted records did not produce faster research progress in this experiment.
 
-### A higher first-order score is not a higher capacity to improve
+### Task scores and improvement ability measure different outcomes
 
 Many self-training studies report model performance on the target task. SPIN and Self-Rewarding show that some metrics continue to rise across iterations, while also reporting diminishing gains or regressions on other tasks [M-20, M-18]. These findings matter, but they describe changes in task performance. They do not directly test whether an updated model can improve the next task faster.
 

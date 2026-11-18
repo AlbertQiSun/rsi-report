@@ -30,7 +30,7 @@ RSI 的关键在于改进循环是否回到改进者自身。Yudkowsky 将“系
 
 RSI 的定义还涉及两个不同问题：改进机制由谁控制，以及改进是否逐代加速。Tang 等人把前者作为形式边界：当数据选择、训练配方或其他改进机制仍位于 agent 外部时，过程属于一般迭代策略改进（GPI）；当系统能够内化并改写这些机制时，才符合他们对 RSI 的定义 [5]。这一界定回答“什么过程算 RSI”，并不预先回答它是否有效。
 
-后一个问题需要测量。Yampolskiy 将自我修改分为自我修改、弱自我改进和递归自我改进三个层次 [4]。其中最高一层不只是把自身参数调好，而是“越改越会改”：系统能持续改进产生后继者的方法。Chalmers 将相关能力称为 self-amplifying capacity，即产生下一代的能力本身得到放大 [11]。若训练流程仍由人预先固定，自蒸馏或自博弈的任务分数衡量的是一阶表现，不是改进机制的递归增长〔推断〕[12,4,5]。
+后一个问题需要测量。Yampolskiy 将自我修改分为自我修改、弱自我改进和递归自我改进三个层次 [4]。最高一层要求系统“越改越会改”，持续提升产生后继者的方法。Chalmers 将相关能力称为 self-amplifying capacity，即产生下一代的能力本身得到放大 [11]。若训练流程仍由人预先固定，自蒸馏或自博弈的任务分数衡量的是一阶表现，不是改进机制的递归增长〔推断〕[12,4,5]。
 
 本文据此把证据分成两层。**一阶改进**是固定的研究者在给定预算内改善目标。Qwen3.5-9B 将 NanoChat 验证损失从 1.4152 降至 1.2308，就是一阶成果 [1]。**跨代改进**则比较继任研究者在相同任务和预算下的改进速度。若后继者的改进速度高于前代，才有直接证据表明改进能力正在增长。Weco 把这一门槛称为 ignition，AIDE² 据此设计了 ignition test [13,6]；HGM 则用后代表现衡量 agent 产生更强后继者的能力，并称其为 metaproductivity [14]。
 
@@ -163,13 +163,13 @@ Qwen3.5-9B 运行 176.6 分钟，提出并评测 72 次尝试，NanoChat 验证�
 
 *图 18　加入反思、经验或记忆后的相对表现变化。不同研究使用的任务和指标不同，图中比较各自相对变化，不比较绝对分数。橙色表示下降，蓝色表示提升 [65,70,67,71,66,68,63]。*
 
-#### 自生成数据不等于学会判断
+#### 成功记录没有教会模型更好的研究判断
 
 第一代成功记录微调模型与失败记录安慰剂几乎相同。这个结果与 Spurious Rewards 的发现相近：在 MATH-500 上，随机奖励取得了真实奖励大部分的提升 [72]。Mind the Gap 也发现，一些表面上的首轮自我改进来自格式遵循，而非任务能力本身 [73]。模型在更新后变好，仍需通过对照判断它是否学到了有效反馈中的信息。数据量、格式和行为激活都可能带来表面提升。
 
 被否决记录构成安慰剂对照，用来区分训练造成的变化与有效研究信号带来的收益。在本实验中，成功记录微调没有带来更快的研究进展。
 
-#### 一阶指标上升，不等于改进能力上升
+#### 任务得分与改进能力是两种结果
 
 许多自训练研究报告的是模型在目标任务上的表现。SPIN 和 Self-Rewarding 等工作展示了迭代训练后部分指标继续上升，同时也报告边际收益递减或其他任务上的回退 [54,74]。这些结果有价值，这些结果回答特定任务表现如何变化，尚未直接检验更新后的模型能否更快改进下一项任务。
 
@@ -185,7 +185,7 @@ agent 层面的工作提供了相邻但不同的证据。DGM 显示，让被改�
 
 ### 6. Ling 的研究方向
 
-如果目标是让 Ling 逐代提高研发能力，系统就必须把“下一代是否更善于改进”作为训练信号，而不能只优化某个下游任务的终点分数。本报告的实验表明，经验笔记和模型自选配方都可能把直觉上合理的筛选规则带入更新过程，却没有提高后继者的改进速度。一个可行方向，是让 Ling 提出更新方案，再用独立评估直接检验更新后的 Ling 是否更善于研发。
+如果目标是让 Ling 逐代提高研发能力，训练信号需要直接反映下一代是否更善于改进，并与下游任务表现区分开。本报告的实验表明，经验笔记和模型自选配方都可能把直觉上合理的筛选规则带入更新过程，却没有提高后继者的改进速度。一个可行方向，是让 Ling 提出更新方案，再用独立评估直接检验更新后的 Ling 是否更善于研发。
 
 Ling-3.0-flash 已具备开展 agent 研究的基础：它是总参数 124B、激活参数 5.1B 的 MoE 模型，并在训练中使用了大量交互环境 [76]。蚂蚁的 Ring-1T 强化学习系统和 AReaL 异步训练框架提供了可衔接的训练基础设施 [77,78]。关键在于把研发任务、更新机制和代际评估纳入一个有可验证反馈的学习循环。
 
@@ -242,7 +242,7 @@ The central question is whether the improvement loop returns to the improver. Yu
 
 Two questions are often bundled together: who controls the improvement mechanism, and whether improvement accelerates across generations. Tang et al. use the first as a formal boundary. When data selection, training recipes, or other mechanisms remain outside the agent, the process is general iterative policy improvement (GPI). It qualifies as RSI under their definition only when the system can internalize and rewrite those mechanisms [5]. This definition answers what counts as RSI, not whether RSI works.
 
-Effectiveness requires a separate measurement. Yampolskiy distinguishes self-modification, weak self-improvement, and recursive self-improvement [4]. The highest level requires more than tuning the system. The system must get better at getting better by improving how it produces successors. Chalmers calls the relevant capacity self-amplifying capacity, the capacity to produce the next generation [11]. Thus, self-distillation or self-play may improve a target task, but if people fix the training process in advance, task scores alone do not establish stronger recursive improvement (an inference) [12,4,5].
+Effectiveness requires a separate measurement. Yampolskiy distinguishes self-modification, weak self-improvement, and recursive self-improvement [4]. The highest level requires more than tuning the system. The system must get better at getting better by improving how it produces successors. Chalmers calls the relevant capacity self-amplifying capacity, the capacity to produce the next generation [11]. When people fix the training process in advance, self-distillation and self-play task scores support a first-order performance claim. Recursive improvement requires evidence that the update mechanism itself strengthens across generations (an inference) [12,4,5].
 
 This report separates the evidence into two levels. **First-order improvement** occurs when a fixed researcher improves a target under a given budget. Qwen3.5-9B lowering NanoChat validation loss from 1.4152 to 1.2308 is a first-order result [1]. **Cross-generation improvement** compares the speed of successor researchers under the same tasks and budget. A successor that improves faster than its predecessor provides direct evidence that the capacity to improve is growing. Weco calls this threshold ignition, and AIDE² operationalizes it with an ignition test [13,6]. HGM measures an agent's capacity to produce stronger descendants as metaproductivity [14].
 
@@ -373,13 +373,13 @@ Useful memories can be checked against the environment and matched to the task a
 
 *Figure 18. Relative performance after adding reflection, experience, or memory. Tasks and metrics differ across studies, so the figure compares relative changes rather than absolute scores. Orange indicates a drop and blue a gain [65,70,67,71,66,68,63].*
 
-#### Self-generated data does not imply learned judgment
+#### Accepted records did not teach research judgment
 
 The first successor fine-tuned on accepted records performed almost identically to the rejected-record placebo. This resembles Spurious Rewards, where random rewards captured most of the gain of true rewards on MATH-500 [72]. Mind the Gap likewise found that some apparent first-round self-improvement came from better format following rather than task ability [73]. A score increase after an update does not show that the model learned useful information from feedback. Data volume, formatting, and behavior activation require controls.
 
 Rejected records serve as a placebo, separating generic effects of training from gains due to useful research signals. Fine-tuning on accepted records did not produce faster research progress in this experiment.
 
-#### A higher first-order score is not a higher capacity to improve
+#### Task scores and improvement ability measure different outcomes
 
 Many self-training studies report model performance on the target task. SPIN and Self-Rewarding show that some metrics continue to rise across iterations, while also reporting diminishing gains or regressions on other tasks [54,74]. These findings matter, but they describe changes in task performance. They do not directly test whether an updated model can improve the next task faster.
 
@@ -395,7 +395,7 @@ Section 4 compares fine-tuned researchers under fixed tasks and budgets, with A/
 
 ### 6. A research direction for Ling
 
-If the goal is for Ling to improve its research ability across generations, training must reward whether the next generation becomes a better improver, rather than only optimizing the endpoint score of a downstream task. The experiments in this report show that lessons notes and self-designed recipes can carry intuitive but harmful filters into an update without increasing successor improvement speed. One direction is to let Ling propose updates, then test directly whether the resulting Ling is better at research.
+If the goal is for Ling to improve its research ability across generations, training must reward whether the next generation becomes a better improver, alongside downstream task performance. The experiments in this report show that lessons notes and self-designed recipes can carry intuitive but harmful filters into an update without increasing successor improvement speed. One direction is to let Ling propose updates, then test directly whether the resulting Ling is better at research.
 
 Ling-3.0-flash has a foundation for agent research: it is a MoE model with 124B total and 5.1B active parameters, trained with a large set of interactive environments [76]. Ant's Ring-1T reinforcement-learning system and AReaL asynchronous training framework offer infrastructure that could support the loop [77,78]. The key is to connect research tasks, update mechanisms, and generational evaluation through verifiable feedback.
 
