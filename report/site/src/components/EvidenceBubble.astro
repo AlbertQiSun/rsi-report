@@ -28,7 +28,7 @@ const BRANCH = import.meta.env.PUBLIC_REPO_BRANCH || 'main';
   </section>
 </div>
 
-<style>
+<style is:global>
   .eb { position: fixed; right: 20px; bottom: 20px; z-index: 60; font-family: var(--sans); }
   .eb-fab { display: flex; align-items: center; gap: 8px; padding: 10px 14px 10px 12px; border: 0; border-radius: 999px;
     background: var(--accent); color: #fff; box-shadow: 0 6px 20px rgba(30, 50, 120, .25); cursor: pointer; font: inherit; font-size: 14px; }
@@ -45,14 +45,18 @@ const BRANCH = import.meta.env.PUBLIC_REPO_BRANCH || 'main';
   .eb-form input { flex: 1; min-width: 0; font: inherit; font-size: 14px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--text); }
   .eb-form button { border: 0; border-radius: 8px; background: var(--accent); color: #fff; padding: 0 12px; cursor: pointer; font-size: 15px; }
   .eb-status { margin: 4px 14px 6px; font-size: 12px; color: var(--faint); }
-  .eb-results { list-style: none; margin: 0; padding: 0 14px 14px; overflow: auto; flex: 1; display: grid; gap: 10px; align-content: start; }
-  .eb-hit { border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; background: var(--bg); }
-  .eb-meta { display: flex; gap: 6px; align-items: baseline; font-size: 12px; margin-bottom: 4px; min-width: 0; }
-  .eb-kind { flex: none; font-family: var(--mono); font-size: 10px; text-transform: uppercase; letter-spacing: .05em; padding: 1px 5px; border-radius: 4px; background: var(--accent-soft); color: var(--accent); }
-  .eb-meta a, .eb-meta span.eb-where { font-family: var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .eb-hit pre { margin: 0; font-family: var(--mono); font-size: 11.5px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; max-height: 12.5em; overflow: auto; color: var(--text); }
-  .eb-hit mark { background: #fde9a8; color: inherit; border-radius: 2px; }
-  .eb-ln { color: var(--faint); user-select: none; }
+  .eb-results { list-style: none; margin: 0; padding: 0 14px 14px; overflow: auto; flex: 1; display: flex; flex-direction: column; gap: 8px; }
+  .eb .eb-hit { border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px 6px; background: var(--bg); font-size: 13px; line-height: 1.5; }
+  .eb .eb-meta { display: flex; gap: 6px; align-items: center; margin: 0 0 4px; min-width: 0; }
+  .eb .eb-kind { flex: none; font-family: var(--sans); font-size: 10.5px; line-height: 1; padding: 3px 6px; border-radius: 4px; background: var(--accent-soft); color: var(--accent); }
+  .eb .eb-meta a, .eb .eb-meta .eb-where { flex: 1; min-width: 0; font-family: var(--mono); font-size: 11.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-decoration: none; }
+  .eb .eb-meta a:hover { color: var(--accent); text-decoration: underline; }
+  .eb .eb-lines { margin: 0; padding: 0; font-family: var(--mono); font-size: 11.5px; line-height: 1.55; color: var(--text); }
+  .eb .eb-line { display: grid; grid-template-columns: 3.2em 1fr; gap: 6px; }
+  .eb .eb-ln { color: var(--faint); text-align: right; user-select: none; }
+  .eb .eb-txt { white-space: pre-wrap; word-break: break-word; overflow-wrap: anywhere; }
+  .eb .eb-gap { color: var(--faint); padding-left: 3.6em; line-height: 1.2; }
+  .eb mark { background: #fde9a8; color: inherit; border-radius: 2px; padding: 0 1px; }
   @media (max-width: 520px) { .eb { right: 12px; bottom: 12px; } .eb-fab-label { display: none; } }
 </style>
 
@@ -134,9 +138,21 @@ const BRANCH = import.meta.env.PUBLIC_REPO_BRANCH || 'main';
         const [fi, s, e, kind, text] = d.c, path = IDX.files[fi], where = `${path}:${s}–${e}`;
         const url = REPO ? `${REPO}/blob/${BRANCH}/${encodeURI(path)}#L${s}-L${e}` : null;
         const li = document.createElement('li'); li.className = 'eb-hit';
+        const words = qt.filter((t) => t.length > 1 || /[\u3400-\u9fff]/.test(t));
+        const all = text.split('\n').map((l, i) => ({ n: s + i, l }));
+        const score = (l) => words.reduce((a, w) => a + (l.toLowerCase().includes(w) ? w.length : 0), 0);
+        const best = all.reduce((m, x) => (score(x.l) > score(m.l) ? x : m), all[0]);
+        const bi = all.indexOf(best);
+        const win = all.slice(Math.max(0, bi - 2), bi + 6).filter((x) => x.l.trim() && !/^\s*\[\[figure:/.test(x.l));
+        let html = '', prev = null;
+        for (const x of win) {
+          if (prev !== null && x.n > prev + 1) html += '<div class="eb-gap">⋯</div>';
+          html += `<div class="eb-line"><span class="eb-ln">${x.n}</span><span class="eb-txt">${highlight(x.l.length > 400 ? x.l.slice(0, 400) + '…' : x.l, qt)}</span></div>`;
+          prev = x.n;
+        }
         li.innerHTML = `<div class="eb-meta"><span class="eb-kind">${(kinds[kind] || [kind, kind])[zh() ? 0 : 1]}</span>` +
           (url ? `<a href="${url}" target="_blank" rel="noopener" title="${esc(where)}">${esc(where)}</a>` : `<span class="eb-where">${esc(where)}</span>`) +
-          `</div><pre>${text.split('\n').map((l, i) => `<span class="eb-ln">${String(s + i).padStart(4, ' ')} </span>${highlight(l, qt)}`).join('\n')}</pre>`;
+          `</div><div class="eb-lines">${html}</div>`;
         list.appendChild(li);
       }
     }
