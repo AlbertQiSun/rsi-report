@@ -299,7 +299,7 @@ with ONE JSON object and nothing after it:
 
 
 def chat(gateway_url: str, model: str, messages: list, *, run: str, gen: int, token_path: str | None,
-         max_tokens: int = 8192, temperature: float = 0.6, timeout_s: float = 900) -> tuple[str, str]:
+         max_tokens: int = 32768, temperature: float = 0.6, timeout_s: float = 2400) -> tuple[str, str]:
     body = {"model": model, "messages": messages, "max_tokens": max_tokens, "temperature": temperature, "seed": 0,
             "chat_template_kwargs": {"enable_thinking": True}}
     headers = {"Content-Type": "application/json", "X-RSI-Run": run, "X-RSI-Agent": "update-designer",
@@ -406,8 +406,10 @@ def design(spec: dict) -> dict:
     attempts = []
     recipe, n = None, None
     for attempt in range(4):
+        # 11-18: 8192 was too short (SD1 filled it twice while still thinking); 9B serves 131072 context.
         text, finish = chat(spec["gateway_url"], spec.get("model", "improver"), msgs, run=spec["run"],
-                            gen=int(spec.get("gen", 1)), token_path=spec.get("token_path"))
+                            gen=int(spec.get("gen", 1)), token_path=spec.get("token_path"),
+                            max_tokens=int(spec.get("max_tokens", 32768)))
         att = {"attempt": attempt, "finish_reason": finish, "response": text}
         attempts.append(att)
         obj = parse_json(text)
