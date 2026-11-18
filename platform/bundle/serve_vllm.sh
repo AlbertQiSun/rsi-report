@@ -130,8 +130,11 @@ if [[ $EXPOSE -eq 1 ]]; then
     [[ $DRY -eq 1 ]] || { echo "cannot bind a port on $IP (wrong BIND_IP?)" >&2; exit 2; }
     EDGE_PORT="<edge-port>"
   fi
+  # The edge serves ONLY its own vLLM: it must not read the shared ports.json. 11-18: with two exposed 27B
+  # instances (ladder-27b on node-c, ladder-27b-evo on node-d) each edge listed the other as an upstream,
+  # so /v1/models recursed between them (1.3M requests in 45 min) and the evo service never passed its check.
   EDGE=("$PY" -m rsi.gateway --host "$IP" --port "$EDGE_PORT" --upstream "$NAME=http://127.0.0.1:$PORT"
-        --token-file "$TOKEN_FILE" --ports-file "$PORTS" --ports-key "" --no-record
+        --token-file "$TOKEN_FILE" --ports-file "$R/run/edge-noports.json" --ports-key "" --no-record
         --retry-deadline-s 60)
   URL="http://$IP:$EDGE_PORT"
 else
