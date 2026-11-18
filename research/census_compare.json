@@ -1,0 +1,635 @@
+{
+ "flint": {
+  "agentic": {
+   "n": 10,
+   "classes": {
+    "telegraphic": 10
+   },
+   "selfref": {},
+   "median_reasoning_chars": 1370,
+   "median_content_chars": 3658,
+   "empty_content": 1,
+   "n_truncated": null,
+   "cjk_share_reasoning": 0.0,
+   "top_openers": {
+    "We need": 10
+   }
+  },
+  "chat": {
+   "n": 10,
+   "classes": {
+    "gemini_numbered": 9,
+    "okay_so": 1
+   },
+   "selfref": {},
+   "median_reasoning_chars": 2831,
+   "median_content_chars": 1828,
+   "empty_content": 1,
+   "n_truncated": null,
+   "cjk_share_reasoning": 0.0,
+   "top_openers": {
+    "1. **Analyze": 7,
+    "1. **Deconstruct": 2,
+    "Okay, the": 1
+   }
+  },
+  "code": {
+   "n": 10,
+   "classes": {
+    "telegraphic": 10
+   },
+   "selfref": {},
+   "median_reasoning_chars": 1407,
+   "median_content_chars": 1511,
+   "empty_content": 0,
+   "n_truncated": null,
+   "cjk_share_reasoning": 0.0,
+   "top_openers": {
+    "We need": 10
+   }
+  },
+  "knowledge": {
+   "n": 10,
+   "classes": {
+    "gemini_numbered": 10
+   },
+   "selfref": {},
+   "median_reasoning_chars": 3617,
+   "median_content_chars": 1375,
+   "empty_content": 0,
+   "n_truncated": null,
+   "cjk_share_reasoning": 0.0,
+   "top_openers": {
+    "1. **Deconstruct": 7,
+    "1. **Analyze": 2,
+    "1. **Identify": 1
+   }
+  },
+  "math": {
+   "n": 10,
+   "classes": {
+    "telegraphic": 10
+   },
+   "selfref": {},
+   "median_reasoning_chars": 318,
+   "median_content_chars": 209,
+   "empty_content": 0,
+   "n_truncated": null,
+   "cjk_share_reasoning": 0.0,
+   "top_openers": {
+    "We need": 10
+   }
+  },
+  "meta": {
+   "n": 10,
+   "classes": {
+    "gemini_numbered": 7,
+    "user_asks": 3
+   },
+   "selfref": {
+    "As a large language model": 1,
+    "Gemini model": 1,
+    "As a Gemini": 1
+   },
+   "median_reasoning_chars": 2086,
+   "median_content_chars": 447,
+   "empty_content": 0,
+   "n_truncated": null,
+   "cjk_share_reasoning": 0.0,
+   "top_openers": {
+    "1. **Analyze": 6,
+    "The user": 3,
+    "1. **Deconstruct": 1
+   }
+  },
+  "safety": {
+   "n": 10,
+   "classes": {
+    "gemini_numbered": 5,
+    "telegraphic": 3,
+    "okay_so": 2
+   },
+   "selfref": {},
+   "median_reasoning_chars": 3213,
+   "median_content_chars": 1902,
+   "empty_content": 0,
+   "n_truncated": null,
+   "cjk_share_reasoning": 0.0,
+   "top_openers": {
+    "1. **Analyze": 4,
+    "We need": 3,
+    "Okay, the": 2,
+    "1. **Deconstruct": 1
+   }
+  },
+  "zh": {
+   "n": 10,
+   "classes": {
+    "other": 5,
+    "gemini_numbered": 3,
+    "user_asks": 1,
+    "telegraphic": 1
+   },
+   "selfref": {},
+   "median_reasoning_chars": 314,
+   "median_content_chars": 454,
+   "empty_content": 1,
+   "n_truncated": null,
+   "cjk_share_reasoning": 0.611,
+   "top_openers": {
+    "1. **解构用户的请求**：": 3,
+    "The user": 1,
+    "好的，用户需要一封请假邮件，理由是感冒发烧。 这是一个比较简单的请求，但邮件的正式程度和风格需要根据用户和收件人的关系来调整。用户没有提供具体场景，所以最好给出几个不同版本，覆盖常见情况，让用户根据实际情况选择。": 1,
+    "我们根据要求，用三句话总结《西游记》的主要情节。需要简洁准确。第一句：唐僧师徒四人西行取经。第二句：历经八十一难，克服妖魔。第三句：最终修炼成佛，归西天。可以更精炼。": 1,
+    "我们被问到：\"Python 里列表和元组有什么区别？\"": 1
+   }
+  },
+  "ALL": {
+   "n": 80,
+   "classes": {
+    "telegraphic": 34,
+    "gemini_numbered": 34,
+    "other": 5,
+    "user_asks": 4,
+    "okay_so": 3
+   },
+   "selfref": {
+    "As a large language model": 1,
+    "Gemini model": 1,
+    "As a Gemini": 1
+   },
+   "median_reasoning_chars": 1411,
+   "median_content_chars": 1031,
+   "empty_content": 3,
+   "n_truncated": null,
+   "cjk_share_reasoning": 0.031,
+   "top_openers": {
+    "We need": 33,
+    "1. **Analyze": 19,
+    "1. **Deconstruct": 11,
+    "The user": 4,
+    "1. **解构用户的请求**：": 3
+   }
+  }
+ },
+ "apex": {
+  "agentic": {
+   "n": 10,
+   "classes": {
+    "user_asks": 10
+   },
+   "selfref": {},
+   "median_reasoning_chars": 1890,
+   "median_content_chars": 2411,
+   "empty_content": 2,
+   "n_truncated": null,
+   "cjk_share_reasoning": 0.0,
+   "top_openers": {
+    "The user": 10
+   }
+  },
+  "chat": {
+   "n": 10,
+   "classes": {
+    "user_asks": 9,
+    "other": 1
+   },
+   "selfref": {},
+   "median_reasoning_chars": 1227,
+   "median_content_chars": 1286,
+   "empty_content": 0,
+   "n_truncated": null,
+   "cjk_share_reasoning": 0.0,
+   "top_openers": {
+    "The user": 10
+   }
+  },
+  "code": {
+   "n": 10,
+   "classes": {
+    "user_asks": 6,
+    "simple_task": 3,
+    "other": 1
+   },
+   "selfref": {},
+   "median_reasoning_chars": 704,
+   "median_content_chars": 1311,
+   "empty_content": 1,
+   "n_truncated": null,
+   "cjk_share_reasoning": 0.0,
+   "top_openers": {
+    "The user": 6,
+    "Simple task:": 3,
+    "Explain race": 1
+   }
+  },
+  "knowledge": {
+   "n": 10,
+   "classes": {
+    "user_asks": 10
+   },
+   "selfref": {},
+   "median_reasoning_chars": 808,
+   "median_content_chars": 1685,
+   "empty_content": 0,
+   "n_truncated": null,
+   "cjk_share_reasoning": 0.0,
+   "top_openers": {
+    "The user": 10
+   }
+  },
+  "math": {
+   "n": 10,
+   "classes": {
+    "user_asks": 7,
+    "other": 3
+   },
+   "selfref": {},
+   "median_reasoning_chars": 273,
+   "median_content_chars": 523,
+   "empty_content": 0,
+   "n_truncated": null,
+   "cjk_share_reasoning": 0.0,
+   "top_openers": {
+    "The user": 7,
+    "2x +": 1,
+    "Area =": 1,
+    "Simple system:": 1
+   }
+  },
+  "meta": {
+   "n": 10,
+   "classes": {
+    "user_asks": 10
+   },
+   "selfref": {},
+   "median_reasoning_chars": 384,
+   "median_content_chars": 353,
+   "empty_content": 0,
+   "n_truncated": null,
+   "cjk_share_reasoning": 0.0,
+   "top_openers": {
+    "The user": 10
+   }
+  },
+  "safety": {
+   "n": 10,
+   "classes": {
+    "user_asks": 10
+   },
+   "selfref": {},
+   "median_reasoning_chars": 1258,
+   "median_content_chars": 1428,
+   "empty_content": 0,
+   "n_truncated": null,
+   "cjk_share_reasoning": 0.0,
+   "top_openers": {
+    "The user": 10
+   }
+  },
+  "zh": {
+   "n": 10,
+   "classes": {
+    "user_asks": 10
+   },
+   "selfref": {},
+   "median_reasoning_chars": 1267,
+   "median_content_chars": 632,
+   "empty_content": 1,
+   "n_truncated": null,
+   "cjk_share_reasoning": 0.102,
+   "top_openers": {
+    "The user": 10
+   }
+  },
+  "ALL": {
+   "n": 80,
+   "classes": {
+    "user_asks": 72,
+    "other": 5,
+    "simple_task": 3
+   },
+   "selfref": {},
+   "median_reasoning_chars": 955,
+   "median_content_chars": 944,
+   "empty_content": 4,
+   "n_truncated": null,
+   "cjk_share_reasoning": 0.013,
+   "top_openers": {
+    "The user": 73,
+    "Simple task:": 3,
+    "Explain race": 1,
+    "2x +": 1,
+    "Area =": 1
+   }
+  }
+ },
+ "qwen36": {
+  "agentic": {
+   "n": 10,
+   "classes": {
+    "heres_thinking_process": 10
+   },
+   "selfref": {},
+   "median_reasoning_chars": 5035,
+   "median_content_chars": 0,
+   "empty_content": 8,
+   "n_truncated": null,
+   "cjk_share_reasoning": 0.0,
+   "top_openers": {
+    "Here's a": 10
+   }
+  },
+  "chat": {
+   "n": 10,
+   "classes": {
+    "other": 6,
+    "heres_thinking_process": 4
+   },
+   "selfref": {},
+   "median_reasoning_chars": 4371,
+   "median_content_chars": 388,
+   "empty_content": 1,
+   "n_truncated": null,
+   "cjk_share_reasoning": 0.0,
+   "top_openers": {
+    "Here's a": 8,
+    "Thinking Process:": 2
+   }
+  },
+  "code": {
+   "n": 10,
+   "classes": {
+    "heres_thinking_process": 10
+   },
+   "selfref": {},
+   "median_reasoning_chars": 4039,
+   "median_content_chars": 381,
+   "empty_content": 5,
+   "n_truncated": null,
+   "cjk_share_reasoning": 0.0,
+   "top_openers": {
+    "Here's a": 10
+   }
+  },
+  "knowledge": {
+   "n": 10,
+   "classes": {
+    "heres_thinking_process": 10
+   },
+   "selfref": {},
+   "median_reasoning_chars": 3040,
+   "median_content_chars": 856,
+   "empty_content": 3,
+   "n_truncated": null,
+   "cjk_share_reasoning": 0.0,
+   "top_openers": {
+    "Here's a": 10
+   }
+  },
+  "math": {
+   "n": 10,
+   "classes": {
+    "heres_thinking_process": 8,
+    "other": 2
+   },
+   "selfref": {},
+   "median_reasoning_chars": 2692,
+   "median_content_chars": 364,
+   "empty_content": 2,
+   "n_truncated": null,
+   "cjk_share_reasoning": 0.0,
+   "top_openers": {
+    "Here's a": 8,
+    "Here's my": 2
+   }
+  },
+  "meta": {
+   "n": 10,
+   "classes": {
+    "heres_thinking_process": 8,
+    "other": 2
+   },
+   "selfref": {
+    "Alibaba": 19,
+    "I am Qwen": 9,
+    "Qwen": 6,
+    "As a large language model": 3
+   },
+   "median_reasoning_chars": 1510,
+   "median_content_chars": 330,
+   "empty_content": 0,
+   "n_truncated": null,
+   "cjk_share_reasoning": 0.0,
+   "top_openers": {
+    "Here's a": 8,
+    "Thinking Process:": 2
+   }
+  },
+  "safety": {
+   "n": 10,
+   "classes": {
+    "heres_thinking_process": 10
+   },
+   "selfref": {},
+   "median_reasoning_chars": 2740,
+   "median_content_chars": 970,
+   "empty_content": 0,
+   "n_truncated": null,
+   "cjk_share_reasoning": 0.0,
+   "top_openers": {
+    "Here's a": 10
+   }
+  },
+  "zh": {
+   "n": 10,
+   "classes": {
+    "heres_thinking_process": 10
+   },
+   "selfref": {},
+   "median_reasoning_chars": 3413,
+   "median_content_chars": 126,
+   "empty_content": 3,
+   "n_truncated": null,
+   "cjk_share_reasoning": 0.187,
+   "top_openers": {
+    "Here's a": 10
+   }
+  },
+  "ALL": {
+   "n": 80,
+   "classes": {
+    "heres_thinking_process": 70,
+    "other": 10
+   },
+   "selfref": {
+    "Alibaba": 19,
+    "I am Qwen": 9,
+    "Qwen": 6,
+    "As a large language model": 3
+   },
+   "median_reasoning_chars": 3215,
+   "median_content_chars": 326,
+   "empty_content": 22,
+   "n_truncated": null,
+   "cjk_share_reasoning": 0.023,
+   "top_openers": {
+    "Here's a": 74,
+    "Thinking Process:": 4,
+    "Here's my": 2
+   }
+  }
+ },
+ "naive": {
+  "agentic": {
+   "n": 10,
+   "classes": {
+    "telegraphic": 10
+   },
+   "selfref": {},
+   "median_reasoning_chars": 819,
+   "median_content_chars": 3772,
+   "empty_content": 0,
+   "n_truncated": 6,
+   "cjk_share_reasoning": 0.0,
+   "top_openers": {
+    "We need": 10
+   }
+  },
+  "chat": {
+   "n": 10,
+   "classes": {
+    "telegraphic": 10
+   },
+   "selfref": {},
+   "median_reasoning_chars": 704,
+   "median_content_chars": 1240,
+   "empty_content": 0,
+   "n_truncated": 1,
+   "cjk_share_reasoning": 0.0,
+   "top_openers": {
+    "We need": 10
+   }
+  },
+  "code": {
+   "n": 10,
+   "classes": {
+    "telegraphic": 10
+   },
+   "selfref": {},
+   "median_reasoning_chars": 913,
+   "median_content_chars": 1409,
+   "empty_content": 0,
+   "n_truncated": 2,
+   "cjk_share_reasoning": 0.0,
+   "top_openers": {
+    "We need": 10
+   }
+  },
+  "knowledge": {
+   "n": 10,
+   "classes": {
+    "telegraphic": 10
+   },
+   "selfref": {},
+   "median_reasoning_chars": 522,
+   "median_content_chars": 674,
+   "empty_content": 0,
+   "n_truncated": 1,
+   "cjk_share_reasoning": 0.0,
+   "top_openers": {
+    "We need": 10
+   }
+  },
+  "math": {
+   "n": 10,
+   "classes": {
+    "telegraphic": 10
+   },
+   "selfref": {},
+   "median_reasoning_chars": 266,
+   "median_content_chars": 241,
+   "empty_content": 0,
+   "n_truncated": 0,
+   "cjk_share_reasoning": 0.0,
+   "top_openers": {
+    "We need": 8,
+    "We are": 2
+   }
+  },
+  "meta": {
+   "n": 10,
+   "classes": {
+    "telegraphic": 10
+   },
+   "selfref": {
+    "OpenAI": 1
+   },
+   "median_reasoning_chars": 565,
+   "median_content_chars": 242,
+   "empty_content": 0,
+   "n_truncated": 0,
+   "cjk_share_reasoning": 0.0,
+   "top_openers": {
+    "We need": 10
+   }
+  },
+  "safety": {
+   "n": 10,
+   "classes": {
+    "telegraphic": 10
+   },
+   "selfref": {},
+   "median_reasoning_chars": 784,
+   "median_content_chars": 863,
+   "empty_content": 0,
+   "n_truncated": 1,
+   "cjk_share_reasoning": 0.0,
+   "top_openers": {
+    "We need": 10
+   }
+  },
+  "zh": {
+   "n": 10,
+   "classes": {
+    "telegraphic": 6,
+    "other": 4
+   },
+   "selfref": {},
+   "median_reasoning_chars": 363,
+   "median_content_chars": 287,
+   "empty_content": 0,
+   "n_truncated": 2,
+   "cjk_share_reasoning": 0.194,
+   "top_openers": {
+    "We need": 3,
+    "我们被问到：\"请简单介绍一下量子计算的基本原理。\" 需要简单介绍量子计算的基本原理。用中文回答。应该涵盖量子比特、叠加、纠缠、量子门、测量等基本概念。保持简洁明了。": 1,
+    "我们被问到解释“内卷”这个词的含义。这是一个中文网络流行语，源自学术概念“involution”。需要给出清晰、准确的解释。注意用户是中文提问，所以用中文回答。解释其起源、含义、常见用法和例子。": 1,
+    "我们要求用三句话总结《西游记》的主要情节。需要简洁概括。第一句：唐僧师徒四人西天取经的缘由和出发。第二句：途中经历九九八十一难，降妖除魔。第三句：最终到达西天取得真经，修成正果。注意三句话。": 1,
+    "我们要求给出三条建议来提高英语口语能力。需要简洁、实用、有针对性。建议包括：多练习、创造语言环境、模仿和反馈等。确保回答清晰。": 1
+   }
+  },
+  "ALL": {
+   "n": 80,
+   "classes": {
+    "telegraphic": 76,
+    "other": 4
+   },
+   "selfref": {
+    "OpenAI": 1
+   },
+   "median_reasoning_chars": 553,
+   "median_content_chars": 536,
+   "empty_content": 0,
+   "n_truncated": 13,
+   "cjk_share_reasoning": 0.029,
+   "top_openers": {
+    "We need": 71,
+    "We are": 2,
+    "我们被问到：\"请简单介绍一下量子计算的基本原理。\" 需要简单介绍量子计算的基本原理。用中文回答。应该涵盖量子比特、叠加、纠缠、量子门、测量等基本概念。保持简洁明了。": 1,
+    "我们被问到解释“内卷”这个词的含义。这是一个中文网络流行语，源自学术概念“involution”。需要给出清晰、准确的解释。注意用户是中文提问，所以用中文回答。解释其起源、含义、常见用法和例子。": 1,
+    "我们要求用三句话总结《西游记》的主要情节。需要简洁概括。第一句：唐僧师徒四人西天取经的缘由和出发。第二句：途中经历九九八十一难，降妖除魔。第三句：最终到达西天取得真经，修成正果。注意三句话。": 1
+   }
+  }
+ }
+}

@@ -1,0 +1,618 @@
+{
+ "_9b_vs_27b": [
+  {
+   "27B": {
+    "ci": [
+     -0.05036026341097285,
+     0.08872542237687164
+    ],
+    "delta": 0.011213886224088185,
+    "harmful": false,
+    "pass": false,
+    "text": "+0.011 [-0.050,+0.089]"
+   },
+   "9B": {
+    "ci": [
+     -0.3829801226106089,
+     -0.03264261775539027
+    ],
+    "delta": -0.1958598065398161,
+    "harmful": true,
+    "pass": false,
+    "text": "-0.196 [-0.383,-0.033]"
+   },
+   "comparison": "U_s gen 1",
+   "steps": {
+    "27B": "dec_us_27b",
+    "9B": "dec_us"
+   }
+  },
+  {
+   "27B": null,
+   "9B": {
+    "ci": [
+     -0.17681640827628628,
+     0.0405325026475468
+    ],
+    "delta": -0.05165704761312526,
+    "harmful": false,
+    "pass": false,
+    "text": "-0.052 [-0.177,+0.041]"
+   },
+   "comparison": "U_w gen 1",
+   "steps": {
+    "27B": "dec_g1_27b",
+    "9B": "dec_g1"
+   }
+  },
+  {
+   "27B": null,
+   "9B": {
+    "ci": [
+     -0.03183418938544569,
+     0.1291073977386415
+    ],
+    "delta": 0.03667413249650803,
+    "harmful": false,
+    "pass": false,
+    "text": "+0.037 [-0.032,+0.129]"
+   },
+   "comparison": "U_w gen 2",
+   "steps": {
+    "27B": "dec_g2_27b",
+    "9B": "dec_g2"
+   }
+  }
+ ],
+ "dec_g1": {
+  "aa": {
+   "diffs": {
+    "muar/id-cls2d-0": -0.0018979281401413362,
+    "muar/id-modadd-0": 0.04979181087269047,
+    "muar/id-parity-0": 0.0006508129987369271,
+    "muar/id-teacher-0": -0.024178388924161798,
+    "muar/ood-charlm-0": 0.00017896237462478037,
+    "muar/ood-copyrev-0": -0.03268945463177242,
+    "muar/ood-dyck-0": -0.02505114662872898,
+    "muar/ood-icl-0": 0.04465312642274322
+   },
+   "floor_2sd_task": 0.06206691594779865,
+   "floor_2se_mean": 0.021943968577011946,
+   "mde": 0.030738948996046064,
+   "mean": 0.0014322242929988576,
+   "n_tasks": 8,
+   "sd_task": 0.031033457973899326,
+   "se_mean": 0.010971984288505973
+  },
+  "also": [
+   {
+    "ci": [
+     -0.01498626568806774,
+     0.33454048086094385
+    ],
+    "delta": 0.14420275892669085,
+    "mean_a": 0.5366562499810916,
+    "mean_b": 0.39245349105440086,
+    "n_tasks": 8,
+    "name": "U_w vs U_s (weights vs retrieval)",
+    "p_signflip": 0.1953125
+   },
+   {
+    "ci": [
+     -0.09255302189032294,
+     0.09639917893048013
+    ],
+    "delta": 0.0013941606942746258,
+    "mean_a": 0.5897074582884916,
+    "mean_b": 0.5883132975942169,
+    "n_tasks": 8,
+    "name": "27B vs 9B (ladder)",
+    "p_signflip": 0.9921875
+   }
+  ],
+  "criteria": {
+   "aa_floor": 0.06206691594779865,
+   "beats_placebo": false,
+   "ci_lower_gt_0": false,
+   "gt_2x_aa": false
+  },
+  "harmful": false,
+  "label": "\u0394\u2082(0) U_w M1",
+  "main": {
+   "ci": [
+    -0.17681640827628628,
+    0.0405325026475468
+   ],
+   "delta": -0.05165704761312526,
+   "mean_a": 0.5366562499810916,
+   "mean_b": 0.5883132975942169,
+   "n_tasks": 8,
+   "p_signflip": 0.4921875
+  },
+  "mde": 0.030738948996046064,
+  "pass": false,
+  "reason": "not detected at this power; minimum detectable effect \u2248 0.0307 nAUC; failed: CI lower bound > 0, \u0394\u2082 > 2x A/A floor, beats placebo",
+  "vs_placebo": {
+   "boot_sd": 0.0423627732619444,
+   "ci": [
+    -0.08395538738433862,
+    0.07979132414605646
+   ],
+   "delta": 0.00445211062731065,
+   "n_tasks": 8,
+   "p_signflip": 0.9140625,
+   "per_task": {
+    "muar/id-cls2d-0": 0.08049167343789754,
+    "muar/id-modadd-0": -0.24894548272781597,
+    "muar/id-parity-0": 0.00028511280309340137,
+    "muar/id-teacher-0": 0.11300443719808229,
+    "muar/ood-charlm-0": 0.03439022113605911,
+    "muar/ood-copyrev-0": -0.011018394620018634,
+    "muar/ood-dyck-0": 0.04508345381205878,
+    "muar/ood-icl-0": 0.022325863979128696
+   },
+   "rho": 1.0083654190151856
+  }
+ },
+ "dec_g2": {
+  "aa": {
+   "diffs": {
+    "muar/id-cls2d-0": -0.0018979281401413362,
+    "muar/id-modadd-0": 0.04979181087269047,
+    "muar/id-parity-0": 0.0006508129987369271,
+    "muar/id-teacher-0": -0.024178388924161798,
+    "muar/ood-charlm-0": 0.00017896237462478037,
+    "muar/ood-copyrev-0": -0.03268945463177242,
+    "muar/ood-dyck-0": -0.02505114662872898,
+    "muar/ood-icl-0": 0.04465312642274322
+   },
+   "floor_2sd_task": 0.06206691594779865,
+   "floor_2se_mean": 0.021943968577011946,
+   "mde": 0.030738948996046064,
+   "mean": 0.0014322242929988576,
+   "n_tasks": 8,
+   "sd_task": 0.031033457973899326,
+   "se_mean": 0.010971984288505973
+  },
+  "also": [
+   {
+    "ci": [
+     -0.10652121255744226,
+     0.0480294820152384
+    ],
+    "delta": -0.014982915116617234,
+    "mean_a": 0.5733303824775997,
+    "mean_b": 0.5883132975942169,
+    "n_tasks": 8,
+    "name": "M2 vs M0",
+    "p_signflip": 0.703125
+   }
+  ],
+  "criteria": {
+   "aa_floor": 0.06206691594779865,
+   "beats_placebo": false,
+   "ci_lower_gt_0": false,
+   "gt_2x_aa": false
+  },
+  "harmful": false,
+  "label": "\u0394\u2082(1) U_w M2 (vs M2' more-M0-data)",
+  "main": {
+   "ci": [
+    -0.03183418938544569,
+    0.1291073977386415
+   ],
+   "delta": 0.03667413249650803,
+   "mean_a": 0.5733303824775997,
+   "mean_b": 0.5366562499810916,
+   "n_tasks": 8,
+   "p_signflip": 0.4453125
+  },
+  "mde": 0.030738948996046064,
+  "pass": false,
+  "reason": "not detected at this power; minimum detectable effect \u2248 0.0307 nAUC; failed: CI lower bound > 0, \u0394\u2082 > 2x A/A floor, beats placebo",
+  "vs_placebo": {
+   "boot_sd": 0.04700249829154722,
+   "ci": [
+    -0.04169815389576247,
+    0.14029759198755268
+   ],
+   "delta": 0.03915141282960111,
+   "n_tasks": 8,
+   "p_signflip": 0.1953125,
+   "per_task": {
+    "muar/id-cls2d-0": -0.04552777299003885,
+    "muar/id-modadd-0": 0.07161375266966019,
+    "muar/id-parity-0": -0.01623884100502193,
+    "muar/id-teacher-0": 0.004910839954713642,
+    "muar/ood-charlm-0": 0.0008331211920644677,
+    "muar/ood-copyrev-0": 0.18258899678065,
+    "muar/ood-dyck-0": 0.006091852001065906,
+    "muar/ood-icl-0": 0.10893935403371541
+   },
+   "rho": 1.0732926885073746
+  }
+ },
+ "dec_g3": {
+  "aa": {
+   "diffs": {
+    "muar/id-cls2d-0": -0.0018979281401413362,
+    "muar/id-modadd-0": 0.04979181087269047,
+    "muar/id-parity-0": 0.0006508129987369271,
+    "muar/id-teacher-0": -0.024178388924161798,
+    "muar/ood-charlm-0": 0.00017896237462478037,
+    "muar/ood-copyrev-0": -0.03268945463177242,
+    "muar/ood-dyck-0": -0.02505114662872898,
+    "muar/ood-icl-0": 0.04465312642274322
+   },
+   "floor_2sd_task": 0.06206691594779865,
+   "floor_2se_mean": 0.021943968577011946,
+   "mde": 0.030738948996046064,
+   "mean": 0.0014322242929988576,
+   "n_tasks": 8,
+   "sd_task": 0.031033457973899326,
+   "se_mean": 0.010971984288505973
+  },
+  "also": [
+   {
+    "ci": [
+     -0.2466124969810628,
+     0.008607352784752957
+    ],
+    "delta": -0.10164262241914956,
+    "mean_a": 0.48667067517506735,
+    "mean_b": 0.5883132975942169,
+    "n_tasks": 8,
+    "name": "M3 vs M0",
+    "p_signflip": 0.1484375
+   }
+  ],
+  "criteria": {
+   "aa_floor": 0.06206691594779865,
+   "beats_placebo": false,
+   "ci_lower_gt_0": false,
+   "gt_2x_aa": false
+  },
+  "harmful": true,
+  "label": "\u0394\u2082(2) U_w M3 (vs M3')",
+  "main": {
+   "ci": [
+    -0.18972403866246154,
+    -0.00474134283939525
+   ],
+   "delta": -0.08665970730253234,
+   "mean_a": 0.48667067517506735,
+   "mean_b": 0.5733303824775997,
+   "n_tasks": 8,
+   "p_signflip": 0.0625
+  },
+  "mde": 0.030738948996046064,
+  "pass": false,
+  "reason": "not detected at this power; minimum detectable effect \u2248 0.0307 nAUC; failed: CI lower bound > 0, \u0394\u2082 > 2x A/A floor, beats placebo",
+  "vs_placebo": {
+   "boot_sd": 0.04830815301567585,
+   "ci": [
+    -0.1637588902436803,
+    0.025340372102779223
+   ],
+   "delta": -0.06639166482530585,
+   "n_tasks": 8,
+   "p_signflip": 0.1875,
+   "per_task": {
+    "muar/id-cls2d-0": -0.13061129851689524,
+    "muar/id-modadd-0": -0.21265622467150602,
+    "muar/id-parity-0": 0.0394668811812553,
+    "muar/id-teacher-0": -0.05904003340997521,
+    "muar/ood-charlm-0": -0.02059187414082775,
+    "muar/ood-copyrev-0": 0.007450091721629137,
+    "muar/ood-dyck-0": 0.09786152885229407,
+    "muar/ood-icl-0": -0.25301238961842115
+   },
+   "rho": 0.8799562725148469
+  }
+ },
+ "dec_sd1": {
+  "aa": {
+   "diffs": {
+    "muar/id-cls2d-0": -0.0018979281401413362,
+    "muar/id-modadd-0": 0.04979181087269047,
+    "muar/id-parity-0": 0.0006508129987369271,
+    "muar/id-teacher-0": -0.024178388924161798,
+    "muar/ood-charlm-0": 0.00017896237462478037,
+    "muar/ood-copyrev-0": -0.03268945463177242,
+    "muar/ood-dyck-0": -0.02505114662872898,
+    "muar/ood-icl-0": 0.04465312642274322
+   },
+   "floor_2sd_task": 0.06206691594779865,
+   "floor_2se_mean": 0.021943968577011946,
+   "mde": 0.030738948996046064,
+   "mean": 0.0014322242929988576,
+   "n_tasks": 8,
+   "sd_task": 0.031033457973899326,
+   "se_mean": 0.010971984288505973
+  },
+  "also": [
+   {
+    "ci": [
+     -0.10938438806072431,
+     0.15538373264281582
+    ],
+    "delta": 0.01652300924595606,
+    "mean_a": 0.604836306840173,
+    "mean_b": 0.5883132975942169,
+    "n_tasks": 8,
+    "name": "SD1 vs M0",
+    "p_signflip": 0.8203125
+   }
+  ],
+  "criteria": {
+   "aa_floor": 0.06206691594779865,
+   "beats_placebo": false,
+   "ci_lower_gt_0": false,
+   "gt_2x_aa": true
+  },
+  "harmful": false,
+  "label": "U_sd round 1: model-designed recipe vs fixed recipe (M1)",
+  "main": {
+   "ci": [
+    -0.05549425628520999,
+    0.1985938299666733
+   ],
+   "delta": 0.06818005685908132,
+   "mean_a": 0.604836306840173,
+   "mean_b": 0.5366562499810916,
+   "n_tasks": 8,
+   "p_signflip": 0.3125
+  },
+  "mde": 0.030738948996046064,
+  "pass": false,
+  "reason": "not detected at this power; minimum detectable effect \u2248 0.0307 nAUC; failed: CI lower bound > 0, beats placebo",
+  "vs_placebo": {
+   "boot_sd": 0.07971842522986279,
+   "ci": [
+    -0.08504108675455388,
+    0.22267238105843776
+   ],
+   "delta": 0.07704182865632264,
+   "n_tasks": 8,
+   "p_signflip": 0.359375,
+   "per_task": {
+    "muar/id-cls2d-0": -0.1617518473832954,
+    "muar/id-modadd-0": 0.35498522147087186,
+    "muar/id-parity-0": 0.23324186616138265,
+    "muar/id-teacher-0": 0.14749877229643238,
+    "muar/ood-charlm-0": -0.09057456341326797,
+    "muar/ood-copyrev-0": 0.13248839970686677,
+    "muar/ood-dyck-0": 0.26551570140300884,
+    "muar/ood-icl-0": -0.26506892099141804
+   },
+   "rho": 1.1459693722477446
+  }
+ },
+ "dec_sd2": {
+  "aa": {
+   "diffs": {
+    "muar/id-cls2d-0": -0.0018979281401413362,
+    "muar/id-modadd-0": 0.04979181087269047,
+    "muar/id-parity-0": 0.0006508129987369271,
+    "muar/id-teacher-0": -0.024178388924161798,
+    "muar/ood-charlm-0": 0.00017896237462478037,
+    "muar/ood-copyrev-0": -0.03268945463177242,
+    "muar/ood-dyck-0": -0.02505114662872898,
+    "muar/ood-icl-0": 0.04465312642274322
+   },
+   "floor_2sd_task": 0.06206691594779865,
+   "floor_2se_mean": 0.021943968577011946,
+   "mde": 0.030738948996046064,
+   "mean": 0.0014322242929988576,
+   "n_tasks": 8,
+   "sd_task": 0.031033457973899326,
+   "se_mean": 0.010971984288505973
+  },
+  "also": [
+   {
+    "ci": [
+     -0.06245307932475821,
+     0.05901547430158838
+    ],
+    "delta": 0.006769121110355802,
+    "mean_a": 0.5950824187045727,
+    "mean_b": 0.5883132975942169,
+    "n_tasks": 8,
+    "name": "SD2 vs M0",
+    "p_signflip": 0.6484375
+   },
+   {
+    "ci": [
+     -0.02753582518516115,
+     0.16842876163734288
+    ],
+    "delta": 0.05842616872348107,
+    "mean_a": 0.5950824187045727,
+    "mean_b": 0.5366562499810916,
+    "n_tasks": 8,
+    "name": "SD2 vs M1",
+    "p_signflip": 0.4453125
+   }
+  ],
+  "criteria": {
+   "aa_floor": 0.06206691594779865,
+   "beats_placebo": false,
+   "ci_lower_gt_0": false,
+   "gt_2x_aa": false
+  },
+  "harmful": false,
+  "label": "U_sd round 2: redesigned recipe after train-task feedback vs round 1",
+  "main": {
+   "ci": [
+    -0.13815292460043344,
+    0.10956052387990538
+   ],
+   "delta": -0.009753888135600255,
+   "mean_a": 0.5950824187045727,
+   "mean_b": 0.604836306840173,
+   "n_tasks": 8,
+   "p_signflip": 0.890625
+  },
+  "mde": 0.030738948996046064,
+  "pass": false,
+  "reason": "not detected at this power; minimum detectable effect \u2248 0.0307 nAUC; failed: CI lower bound > 0, \u0394\u2082 > 2x A/A floor, beats placebo",
+  "vs_placebo": {
+   "boot_sd": 0.041426960829924885,
+   "ci": [
+    -0.042280807284083455,
+    0.12134129957344475
+   ],
+   "delta": 0.04336314662922581,
+   "n_tasks": 8,
+   "p_signflip": 0.203125,
+   "per_task": {
+    "muar/id-cls2d-0": 0.07408636260420176,
+    "muar/id-modadd-0": 0.230642333564063,
+    "muar/id-parity-0": 0.025609845333826264,
+    "muar/id-teacher-0": 0.0288879676831435,
+    "muar/ood-charlm-0": -0.0008015545712203864,
+    "muar/ood-copyrev-0": 0.03528053627176675,
+    "muar/ood-dyck-0": 0.033382993649774526,
+    "muar/ood-icl-0": -0.08018331150174896
+   },
+   "rho": 1.0785963964356564
+  }
+ },
+ "dec_us": {
+  "aa": {
+   "diffs": {
+    "muar/id-cls2d-0": -0.0018979281401413362,
+    "muar/id-modadd-0": 0.04979181087269047,
+    "muar/id-parity-0": 0.0006508129987369271,
+    "muar/id-teacher-0": -0.024178388924161798,
+    "muar/ood-charlm-0": 0.00017896237462478037,
+    "muar/ood-copyrev-0": -0.03268945463177242,
+    "muar/ood-dyck-0": -0.02505114662872898,
+    "muar/ood-icl-0": 0.04465312642274322
+   },
+   "floor_2sd_task": 0.06206691594779865,
+   "floor_2se_mean": 0.021943968577011946,
+   "mde": 0.030738948996046064,
+   "mean": 0.0014322242929988576,
+   "n_tasks": 8,
+   "sd_task": 0.031033457973899326,
+   "se_mean": 0.010971984288505973
+  },
+  "also": [],
+  "criteria": {
+   "aa_floor": 0.06206691594779865,
+   "beats_placebo": false,
+   "ci_lower_gt_0": false,
+   "gt_2x_aa": false
+  },
+  "harmful": true,
+  "label": "\u0394\u2082(0) U_s lessons",
+  "main": {
+   "ci": [
+    -0.3829801226106089,
+    -0.03264261775539027
+   ],
+   "delta": -0.1958598065398161,
+   "mean_a": 0.39245349105440086,
+   "mean_b": 0.5883132975942169,
+   "n_tasks": 8,
+   "p_signflip": 0.109375
+  },
+  "mde": 0.030738948996046064,
+  "pass": false,
+  "reason": "not detected at this power; minimum detectable effect \u2248 0.0307 nAUC; failed: CI lower bound > 0, \u0394\u2082 > 2x A/A floor, beats placebo",
+  "vs_placebo": {
+   "boot_sd": 0.08957772090389661,
+   "ci": [
+    -0.4204317861877147,
+    -0.07459515842803564
+   ],
+   "delta": -0.2389648981006688,
+   "n_tasks": 8,
+   "p_signflip": 0.0078125,
+   "per_task": {
+    "muar/id-cls2d-0": -0.5773753341157868,
+    "muar/id-modadd-0": -0.19792181519147606,
+    "muar/id-parity-0": -0.002706200704008288,
+    "muar/id-teacher-0": -0.0072850080442834475,
+    "muar/ood-charlm-0": -0.013475213414116616,
+    "muar/ood-copyrev-0": -0.5550537303754783,
+    "muar/ood-dyck-0": -0.06704139222347424,
+    "muar/ood-icl-0": -0.4908604907367267
+   },
+   "rho": 0.621542700996658
+  }
+ },
+ "dec_us_27b": {
+  "aa": {
+   "diffs": {
+    "muar/id-cls2d-0": 0.18050986684613834,
+    "muar/id-modadd-0": 0.09501100402889445,
+    "muar/id-parity-0": 5.536170933906348e-07,
+    "muar/id-teacher-0": 0.01341063242657936,
+    "muar/ood-charlm-0": -0.06537565975934664,
+    "muar/ood-copyrev-0": 0.00014389532126590776,
+    "muar/ood-dyck-0": 0.0035760673645689467,
+    "muar/ood-icl-0": 0.004448903992305464
+   },
+   "floor_2sd_task": 0.1500195260425764,
+   "floor_2se_mean": 0.05303991208754882,
+   "mde": 0.07429791683724404,
+   "mean": 0.028965657979687403,
+   "n_tasks": 8,
+   "sd_task": 0.0750097630212882,
+   "se_mean": 0.02651995604377441
+  },
+  "also": [],
+  "criteria": {
+   "aa_floor": 0.1500195260425764,
+   "beats_placebo": false,
+   "ci_lower_gt_0": false,
+   "gt_2x_aa": false
+  },
+  "harmful": false,
+  "label": "\u0394\u2082(0) U_s lessons [27B]",
+  "main": {
+   "ci": [
+    -0.05036026341097285,
+    0.08872542237687164
+   ],
+   "delta": 0.011213886224088185,
+   "mean_a": 0.6009213445125797,
+   "mean_b": 0.5897074582884916,
+   "n_tasks": 8,
+   "p_signflip": 0.78125
+  },
+  "mde": 0.07429791683724404,
+  "pass": false,
+  "reason": "not detected at this power; minimum detectable effect \u2248 0.0743 nAUC; failed: CI lower bound > 0, \u0394\u2082 > 2x A/A floor, beats placebo",
+  "vs_placebo": {
+   "boot_sd": 0.03875773272364371,
+   "ci": [
+    -0.060525669597017065,
+    0.0896146613727469
+   ],
+   "delta": -0.0021520771445879706,
+   "n_tasks": 8,
+   "p_signflip": 0.96875,
+   "per_task": {
+    "muar/id-cls2d-0": -0.029125663101852828,
+    "muar/id-modadd-0": 0.0,
+    "muar/id-parity-0": 7.846920540999225e-05,
+    "muar/id-teacher-0": -0.08875395279454112,
+    "muar/ood-charlm-0": -0.031206320112689756,
+    "muar/ood-copyrev-0": 0.19990269206157607,
+    "muar/ood-dyck-0": -0.013669736513552092,
+    "muar/ood-icl-0": -0.05444210590105403
+   },
+   "rho": 0.9964314840162007
+  }
+ },
+ "g2b_beats_rlocal": {
+  "harmful": false,
+  "label": "Gate2 M0 vs R-local",
+  "nodata": true,
+  "pass": false,
+  "reason": "missing arm data"
+ }
+}

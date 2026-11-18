@@ -1,0 +1,46 @@
+# OS / editor
+.DS_Store
+.claude/
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+*.egg-info/
+*.so
+
+# Node / Astro
+report/site/node_modules/
+report/site/dist/
+report/site/.astro/
+
+# Third-party material and large files (local only)
+other/
+flint-int4/
+rec/
+first-steps-toward-automated-ai-research/
+*.safetensors
+*.gguf
+*.bin
+*.pt
+*.parquet
+*.tgz
+*.tar.gz
+tokenizer.json
+
+# Cluster records and secrets
+research/hpc_allocations.md
+run/
+token
+*.token
+*token*.txt
+*.key
+*.pem
+.env*
+
+# Third-party screenshots
+research/sources/img/
+
+# Local logs
+flint-int4-lfs-pull.log

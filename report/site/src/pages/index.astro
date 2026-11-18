@@ -1,0 +1,274 @@
+---
+import Base from '../layouts/Base.astro';
+import content from '../data/content.json';
+
+// Section order follows report/draft.md (方案甲). Only section 0 has text so far.
+const sections = [
+  { id: 'abstract', num: '00', zh: '摘要', en: 'Abstract' },
+  { id: 'definition', num: '01', zh: '什么才算 RSI', en: 'What counts as RSI' },
+  { id: 'releases', num: '02', zh: '四份材料', en: 'The four releases' },
+  { id: 'gap', num: '03', zh: '没人测过的一环', en: 'The missing measurement' },
+  { id: 'experiment', num: '04', zh: '实验：换上后继模型', en: 'Experiment: swapping in the successor' },
+  { id: 'literature', num: '05', zh: '与文献对照', en: 'Against the literature' },
+  { id: 'ling', num: '06', zh: '给 Ling 的计划', en: 'A plan for Ling' },
+  { id: 'references', num: 'R', zh: '参考文献', en: 'References' },
+];
+const navTop = [
+  { id: 'abstract', zh: '摘要', en: 'Abstract' },
+  { id: 'releases', zh: '材料', en: 'Releases' },
+  { id: 'experiment', zh: '实验', en: 'Experiment' },
+  { id: 'ling', zh: 'Ling 计划', en: 'Ling plan' },
+  { id: 'references', zh: '参考文献', en: 'References' },
+];
+const later = sections.slice(1, -1);
+// number the subsection headings so the side menu can link to them
+const secData = {};
+for (const [k, v] of Object.entries(content.sections)) {
+  const out = {};
+  for (const lang of ['zh', 'en']) {
+    let i = 0;
+    out[lang] = v[lang].map((b) => (b.type === 'h3' ? { ...b, idx: ++i } : b));
+  }
+  secData[k] = out;
+}
+const strip = (h) => h.replace(/<[^>]+>/g, '');
+const subsOf = (num) => {
+  const d = secData[String(Number(num))];
+  return d ? { zh: d.zh.filter((b) => b.type === 'h3'), en: d.en.filter((b) => b.type === 'h3') } : null;
+};
+const negIdx = new Set([1, 2]); // cards whose headline number is a negative result
+// ---- references: short keys, readable URLs, repository links ----
+// Set PUBLIC_REPO_URL (e.g. https://github.com/<user>/<repo>) and optionally PUBLIC_REPO_BRANCH at build time;
+// every internal file then links to its exact line in the repository.
+const REPO = (import.meta.env.PUBLIC_REPO_URL || '').replace(/\/$/, '');
+const BRANCH = import.meta.env.PUBLIC_REPO_BRANCH || 'main';
+const repoLink = (src, line) => (REPO && src ? `${REPO}/blob/${BRANCH}/${src.split('/').map(encodeURIComponent).join('/')}${line ? `#L${line}` : ''}` : '');
+const shortKey = (k) => (k.includes('/') || /\.(md|json|jsonl|txt)$/.test(k) ? k.split('/').pop() : k);
+const prettyUrl = (u) => { const s = u.replace(/^https?:\/\/(www\.)?/, '').replace(/\/$/, ''); return s.length > 64 ? s.slice(0, 62) + '…' : s; };
+const refGroups = [
+  { id: 'all', zh: '全部', en: 'All', count: content.refs.length },
+  { id: 'lit', zh: '学术文献', en: 'Literature', count: content.refs.filter((r) => r.group === 'lit').length },
+  { id: 'ledger', zh: '四份材料', en: 'The four releases', count: content.refs.filter((r) => r.group === 'ledger').length },
+  { id: 'data', zh: '实验数据与记录', en: 'Experiment data', count: content.refs.filter((r) => r.group === 'data').length },
+];
+---
+<Base title="AI 正在改进自己吗？递归自我改进的主张、证据与实证检验" description="孙祺（Qi Sun）：Recursive Self-Improvement in AI: A Survey of Claims, Evidence, and Empirical Tests">
+  <header class="global-header">
+    <div class="global-header-inner">
+      <a class="brand" href="#top">RSI Report</a>
+      <nav class="global-nav" aria-label="Primary">
+        {navTop.map((n) => <a href={`#${n.id}`}><span data-l="zh">{n.zh}</span><span data-l="en">{n.en}</span></a>)}
+      </nav>
+      <div class="lang" role="group" aria-label="Language">
+        <button type="button" data-set-lang="zh" aria-pressed="true">中文</button>
+        <button type="button" data-set-lang="en" aria-pressed="false">English</button>
+      </div>
+    </div>
+    <div class="progress" aria-hidden="true"></div>
+  </header>
+
+  <div class="hero" id="top">
+    <div class="hero-glow" aria-hidden="true"></div>
+    <div class="hero-inner">
+      <div class="eyebrow">Research report · 2026-11-18</div>
+      <h1><span data-l="zh">AI 正在改进自己吗？</span><span data-l="en">Is AI Improving Itself?</span></h1>
+      <p class="subtitle"><span data-l="zh">递归自我改进的主张、证据与实证检验</span><span data-l="en">A Survey of Claims, Evidence, and Empirical Tests on Recursive Self-Improvement</span></p>
+      <p class="deck"><span data-l="zh">AI 能参与研发，不等于 AI 已经学会加速自己的研发。</span><span data-l="en">AI that helps with research is not yet AI that has learned to speed up its own research.</span></p>
+      <p class="thesis">
+        <span data-l="zh">现有 AI 研发成果证明了 AI 能协助改进模型、代码和训练流程，但这还不足以证明递归自我改进。要支持 RSI 主张，需要进一步证明后继系统能改写自身的改进机制，并在跨代比较中持续提高改进速度。对现有研究与公开主张的梳理显示，这类证据仍然有限；本报告的实验也发现，单代 AI 辅助研发可以有效，但使用自身经验训练或让模型自行设计更新配方，并未带来可靠的跨代加速。</span>
+        <span data-l="en">Current AI R&amp;D results show that AI can help improve models, code and training pipelines, but this is not yet evidence of recursive self-improvement. Supporting an RSI claim further requires showing that a successor system can rewrite its own improvement mechanism and that its speed of improvement keeps rising in comparisons across generations. A review of existing research and public claims finds such evidence still scarce; this report's experiment likewise finds that single-generation AI-assisted research works, but training on the model's own experience, or letting the model design its own update recipe, brought no reliable speed-up across generations.</span>
+      </p>
+      <div class="meta">
+        <span class="chip"><span data-l="zh">作者</span><span data-l="en">Author</span> <b data-l="zh">孙祺</b><b data-l="en">Qi Sun</b></span>
+        <span class="chip"><span data-l="zh">类型</span><span data-l="en">Type</span> <b data-l="zh">综述 + 实证案例</b><b data-l="en">Survey with an empirical case study</b></span>
+        <span class="chip"><span data-l="zh">材料</span><span data-l="en">Releases</span> <b>Recursive · Naive · Apex</b></span>
+        <span class="chip"><span data-l="zh">实验模型</span><span data-l="en">Model</span> <b>Qwen3.5-9B</b></span>
+      </div>
+    </div>
+  </div>
+
+  <nav class="page-toc" aria-label="On this page">
+    <p><span data-l="zh">本页内容</span><span data-l="en">On this page</span></p>
+    <ol>
+      {sections.map((s) => (
+        <li><a href={`#${s.id}`}><span class="num">{s.num}</span><span data-l="zh">{s.zh}</span><span data-l="en">{s.en}</span></a>
+          {subsOf(s.num) && subsOf(s.num).zh.length > 0 && (
+            <ol class="page-toc-sublist">
+              {(['zh', 'en'] as const).map((lang) => subsOf(s.num)[lang].map((h) => (
+                <li data-l={lang}><a href={`#${s.id}-${h.idx}-${lang}`}>{strip(h.html).replace(/\s*[：:]\s*/, ' · ')}</a></li>
+              )))}
+            </ol>
+          )}
+        </li>
+      ))}
+    </ol>
+  </nav>
+
+  <nav class="toc-inline" aria-label="On this page">
+    <p><span data-l="zh">本页内容</span><span data-l="en">On this page</span></p>
+    <ol>
+      {sections.map((s) => (
+        <li><a href={`#${s.id}`}><span class="num">{s.num}</span><span data-l="zh">{s.zh}</span><span data-l="en">{s.en}</span></a>
+          {subsOf(s.num) && subsOf(s.num).zh.length > 0 && (
+            <ol class="page-toc-sublist">
+              {(['zh', 'en'] as const).map((lang) => subsOf(s.num)[lang].map((h) => (
+                <li data-l={lang}><a href={`#${s.id}-${h.idx}-${lang}`}>{strip(h.html).replace(/\s*[：:]\s*/, ' · ')}</a></li>
+              )))}
+            </ol>
+          )}
+        </li>
+      ))}
+    </ol>
+  </nav>
+
+  <main>
+    <section class="doc-section" id="abstract">
+      <div class="col">
+        <div class="section-title">
+          <span class="num">00</span>
+          <h2><span data-l="zh">摘要</span><span data-l="en">Abstract</span></h2>
+        </div>
+
+        {(['zh', 'en'] as const).map((lang) => (
+          <div data-l={lang}>
+            <div class="cards">
+              {content.cards[lang].map((c, i) => (
+                <article class={`card t${i} reveal`} style={`transition-delay:${i * 70}ms`}>
+                  <div class={`figure${negIdx.has(i) ? ' neg' : ''}`}>{c.figure.value}</div>
+                  <div class="figure-label">{c.figure.label}</div>
+                  <h3 set:html={c.title} />
+                  <p set:html={c.html} />
+                  {c.notes.map((n) => <p class="note" set:html={(n.pending ? (lang === 'zh' ? '待补：' : 'Pending: ') : '') + n.html} />)}
+                </article>
+              ))}
+            </div>
+            <div class="prose">
+              {content.abstract[lang].map((p) =>
+                p.type === 'figure' && p.svg ? (
+                  <figure class="doc-figure svg-figure reveal">
+                    <div class="svg-wrap" set:html={p.svg} />
+                    <figcaption set:html={p.html} />
+                  </figure>
+                ) : p.pending
+                  ? <p class="pending reveal" data-label={lang === 'zh' ? '待补' : 'Pending'} set:html={p.html} />
+                  : <p class="reveal" set:html={p.html} />
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+    </section>
+
+    {later.map((s) => (
+      <section class="doc-section" id={s.id}>
+        <div class="col">
+          <div class="section-title">
+            <span class="num">{s.num}</span>
+            <h2><span data-l="zh">{s.zh}</span><span data-l="en">{s.en}</span></h2>
+          </div>
+          {secData[String(Number(s.num))] ? (
+            (['zh', 'en'] as const).map((lang) => (
+              <div class="prose" data-l={lang}>
+                {secData[String(Number(s.num))][lang].map((b) =>
+                  b.type === 'h3' ? (
+                    <h3 class="sub-title reveal" id={`${s.id}-${b.idx}-${lang}`} set:html={b.html} />
+                  ) : b.type === 'figure' && b.svg ? (
+                    <figure class="doc-figure svg-figure reveal">
+                      <div class="svg-wrap" set:html={b.svg} />
+                      <figcaption set:html={b.html} />
+                    </figure>
+                  ) : b.type === 'figure' && b.video ? (
+                    <figure class="doc-figure video-figure reveal">
+                      <video src={`${import.meta.env.BASE_URL.replace(/\/$/, '')}/figs/${b.video}`} poster={`${import.meta.env.BASE_URL.replace(/\/$/, '')}/figs/${b.id}.jpg`} controls muted loop playsinline preload="metadata" data-autoplay />
+                      <figcaption set:html={b.html} />
+                    </figure>
+                  ) : b.type === 'list' ? (
+                    b.ordered ? <ol class="doc-list reveal">{b.items.map((x) => <li set:html={x} />)}</ol>
+                              : <ul class="doc-list reveal">{b.items.map((x) => <li set:html={x} />)}</ul>
+                  ) : b.type === 'figure' ? (
+                    <figure class="doc-figure reveal">
+                      <img src={`${import.meta.env.BASE_URL.replace(/\/$/, '')}/figs/${b.id}.${lang}.gif`} alt={lang === 'zh' ? '图 1：两种改进的三联动图' : 'Figure 1: animated three-panel figure on two kinds of improvement'} width="1040" height="640" loading="lazy" data-zoom />
+                      <span class="zoom-hint"><span data-l="zh">点击放大</span><span data-l="en">Click to enlarge</span></span>
+                      <figcaption set:html={b.html} />
+                    </figure>
+                  ) : b.type === 'table' ? (
+                    <div class="table-wrap reveal">
+                      <table class="doc-table">
+                        <thead><tr>{b.head.map((h) => <th set:html={h} />)}</tr></thead>
+                        <tbody>{b.rows.map((r) => <tr>{r.map((c) => <td set:html={c} />)}</tr>)}</tbody>
+                      </table>
+                    </div>
+                  ) : b.pending ? (
+                    <p class="pending reveal" data-label={lang === 'zh' ? '待补' : 'Pending'} set:html={b.html} />
+                  ) : (
+                    <p class="reveal" set:html={b.html} />
+                  )
+                )}
+              </div>
+            ))
+          ) : (
+            <div class="placeholder"><span data-l="zh">本节撰写中。</span><span data-l="en">This section is being written.</span></div>
+          )}
+        </div>
+      </section>
+    ))}
+
+    <section class="doc-section" id="references">
+      <div class="col">
+        <div class="section-title">
+          <span class="num">R</span>
+          <h2><span data-l="zh">参考文献</span><span data-l="en">References</span></h2>
+        </div>
+        <div class="refs-bar">
+          <div class="refs-filter" role="group" aria-label="filter">
+            {refGroups.map((g) => (
+              <button type="button" class={`refs-chip${g.id === 'all' ? ' on' : ''}`} data-group={g.id}>
+                <span data-l="zh">{g.zh}</span><span data-l="en">{g.en}</span><span class="c">{g.count}</span>
+              </button>
+            ))}
+          </div>
+          <button type="button" class="refs-toggle" data-open="0">
+            <span class="o"><span data-l="zh">全部展开</span><span data-l="en">Expand all</span></span>
+            <span class="x"><span data-l="zh">全部收起</span><span data-l="en">Collapse all</span></span>
+          </button>
+        </div>
+        <ol class="refs">
+          {content.refs.map((r) => (
+            <li id={`ref-${r.n}`} data-group={r.group} data-pop={[r.group !== 'data' ? r.note : r.src, ...(r.urls.length ? [prettyUrl(r.urls[0])] : [])].filter(Boolean).join(' · ')}>
+              <details>
+                <summary>
+                  <span class="n">{r.n}</span>
+                  <span class="k">{shortKey(r.key)}</span>
+                  <span class="t"><span data-l="zh">{r.zh}</span><span data-l="en">{r.en}</span></span>
+                  <span class="chev" aria-hidden="true"></span>
+                </summary>
+                <div class="ref-body">
+                  <dl class="meta">
+                    {r.work && (<><dt><span data-l="zh">材料</span><span data-l="en">Release</span></dt><dd>{r.work}</dd></>)}
+                    {r.group !== 'data' && r.note && (<><dt><span data-l="zh">类型</span><span data-l="en">Type</span></dt><dd>{r.note}</dd></>)}
+                    {r.loc && r.jumps.length === 0 && (<><dt><span data-l="zh">引用位置</span><span data-l="en">Cited at</span></dt><dd>{r.loc}</dd></>)}
+                    {r.urls.length > 0 && (<><dt><span data-l="zh">原文</span><span data-l="en">Source</span></dt>
+                      <dd>{r.urls.map((u, i) => <>{i > 0 && ' · '}<a href={u} rel="noopener" target="_blank">{prettyUrl(u)}</a></>)}</dd></>)}
+                    {r.src && (<><dt><span data-l="zh">{r.group === 'data' ? '文件' : '核对记录'}</span><span data-l="en">{r.group === 'data' ? 'File' : 'Check notes'}</span></dt>
+                      <dd class="src">
+                        {repoLink(r.src, r.line) ? <a href={repoLink(r.src, r.line)} rel="noopener" target="_blank">{r.src}{r.line ? `:${r.line}` : ''}</a>
+                                                 : <code>{r.src}{r.line ? `:${r.line}` : ''}</code>}
+                        {r.jumps.map((j) => <> · {repoLink(r.src, j.line) ? <a href={repoLink(r.src, j.line)} rel="noopener" target="_blank">{j.label}</a> : <code>{j.label} → L{j.line}</code>}</>)}
+                      </dd></>)}
+                  </dl>
+                </div>
+              </details>
+            </li>
+          ))}
+        </ol>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site">
+    <div class="col">
+      <span data-l="zh">本页由 report/tools/build_content.py 从 report/draft.md 生成；卡片上的数字由脚本从实验数据计算。</span>
+      <span data-l="en">Generated from report/draft.md by report/tools/build_content.py; card figures are computed from the experiment data.</span>
+    </div>
+  </footer>
+</Base>

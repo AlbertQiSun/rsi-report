@@ -1,0 +1,14 @@
+== ovn1118b-nc-g0  (gen 0, karpathy_greedy, nanochat)
+   wall 176.6 min · metric val_bpb (lower is better) · agents spawned {'researcher': 75}
+   trials proposed 72, decided 73 · verdicts {'adopt': 26, 'reject': 47} · adoption rate 35.6%
+   eval status (excl. baseline) {'ok': 63, 'crash': 9} · audit flags 0 · lessons updates 0
+   per thread:      trials  adopt  reject  explore  rollback  failed_eval
+     thread-0           22     10      12        0         0            2
+     thread-1           26      7      19        0         0            5
+     thread-2           24      8      16        0         0            2
+     unattributed        0      1       0        0         0            0
+   GPU lane utilization (busy / run wall): 1 85.3%, 3 86.7%, 4 81.4%  · mean 84.5%
+   time split (agent-seconds): thinking 76.7 min (14.6%) · tool use 0.2 min (0.0%) · evaluation 447.6 min (85.3%)
+   tool time by tool (s): {'mcp': 7.0, 'read': 4.7, 'edit': 1.0, 'bash': 0.6, 'invalid': 0.0} · 403 tool calls · 460 llm calls · 6,851,299 tokens
+   s0 1.4152003696509723 -> best 1.2309931631424045 (gain 0.184207)
+   nAUC: not computable (no s_ref; pass --s-ref). logged run_end.nAUC = None · unnormalized mean gain (1/N)Σ(s0-best_t) = 0.115761 (N=72)
