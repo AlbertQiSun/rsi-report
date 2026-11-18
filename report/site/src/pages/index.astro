@@ -1,5 +1,6 @@
 ---
 import Base from '../layouts/Base.astro';
+import EvidenceBubble from '../components/EvidenceBubble.astro';
 import content from '../data/content.json';
 
 // Section order of the report. Text comes from report/sections/NN_*.md via tools/build_content.py.
@@ -58,7 +59,6 @@ const refGroups = [
       <a class="brand" href="#top">RSI Report</a>
       <nav class="global-nav" aria-label="Primary">
         {navTop.map((n) => <a href={`#${n.id}`}><span data-l="zh">{n.zh}</span><span data-l="en">{n.en}</span></a>)}
-        <a href={`${import.meta.env.BASE_URL.replace(/\/$/, '')}/search/`}><span data-l="zh">证据检索</span><span data-l="en">Search</span></a>
       </nav>
       <div class="lang" role="group" aria-label="Language">
         <button type="button" data-set-lang="zh" aria-pressed="true">中文</button>
@@ -272,4 +272,5 @@ const refGroups = [
       <span data-l="en">Generated from the section files in report/sections/ by report/tools/build_content.py; card figures are computed from the experiment data.</span>
     </div>
   </footer>
+  <EvidenceBubble />
 </Base>

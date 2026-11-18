@@ -1,0 +1,153 @@
+---
+// Floating "ask the evidence" bubble: no LLM. Ranks line-numbered chunks of every published file (public/search-index.json,
+// built by report/tools/build_search_index.py) with BM25 in the browser and shows the source text with links to the
+// exact lines on GitHub. The index is loaded only when the panel is first opened.
+const BASE = import.meta.env.BASE_URL.replace(/\/$/, '');
+const REPO = (import.meta.env.PUBLIC_REPO_URL || '').replace(/\/$/, '');
+const BRANCH = import.meta.env.PUBLIC_REPO_BRANCH || 'main';
+---
+<div class="eb" data-base={BASE} data-repo={REPO} data-branch={BRANCH}>
+  <button class="eb-fab" type="button" aria-expanded="false" aria-controls="eb-panel">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3h11A2.5 2.5 0 0 1 20 5.5v8a2.5 2.5 0 0 1-2.5 2.5H11l-4.2 3.4c-.5.4-1.3 0-1.3-.6V16A2.5 2.5 0 0 1 4 13.5z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><circle cx="12" cy="9.5" r="2.6" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="m14 11.5 2 2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+    <span class="eb-fab-label"><span data-l="zh">查证据</span><span data-l="en">Evidence</span></span>
+  </button>
+  <section class="eb-panel" id="eb-panel" hidden aria-label="Evidence search">
+    <header class="eb-head">
+      <div>
+        <strong><span data-l="zh">查证据</span><span data-l="en">Find the evidence</span></strong>
+        <p><span data-l="zh">在报告、日志、数据和代码里找原文，不生成回答。</span><span data-l="en">Finds source passages in the report, logs, data and code. No generated answers.</span></p>
+      </div>
+      <button class="eb-close" type="button" aria-label="Close">×</button>
+    </header>
+    <form class="eb-form" autocomplete="off">
+      <input type="search" placeholder="第三轮为什么变差 / LoRA time limit" aria-label="Question or keywords" />
+      <button type="submit" aria-label="Search">↵</button>
+    </form>
+    <p class="eb-status"></p>
+    <ol class="eb-results"></ol>
+  </section>
+</div>
+
+<style>
+  .eb { position: fixed; right: 20px; bottom: 20px; z-index: 60; font-family: var(--sans); }
+  .eb-fab { display: flex; align-items: center; gap: 8px; padding: 10px 14px 10px 12px; border: 0; border-radius: 999px;
+    background: var(--accent); color: #fff; box-shadow: 0 6px 20px rgba(30, 50, 120, .25); cursor: pointer; font: inherit; font-size: 14px; }
+  .eb-fab:hover { filter: brightness(1.06); }
+  .eb-panel { position: absolute; right: 0; bottom: 56px; width: min(420px, calc(100vw - 32px)); height: min(70vh, 640px);
+    display: flex; flex-direction: column; background: var(--paper); border: 1px solid var(--line); border-radius: 14px;
+    box-shadow: 0 16px 48px rgba(20, 30, 60, .18); overflow: hidden; }
+  .eb-panel[hidden] { display: none; }
+  .eb-head { display: flex; justify-content: space-between; gap: 8px; padding: 12px 14px 8px; border-bottom: 1px solid var(--line); }
+  .eb-head strong { font-size: 15px; }
+  .eb-head p { margin: 2px 0 0; font-size: 12.5px; color: var(--muted); line-height: 1.5; }
+  .eb-close { border: 0; background: none; font-size: 22px; line-height: 1; color: var(--muted); cursor: pointer; padding: 0 4px; }
+  .eb-form { display: flex; gap: 6px; padding: 10px 14px 4px; }
+  .eb-form input { flex: 1; min-width: 0; font: inherit; font-size: 14px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--text); }
+  .eb-form button { border: 0; border-radius: 8px; background: var(--accent); color: #fff; padding: 0 12px; cursor: pointer; font-size: 15px; }
+  .eb-status { margin: 4px 14px 6px; font-size: 12px; color: var(--faint); }
+  .eb-results { list-style: none; margin: 0; padding: 0 14px 14px; overflow: auto; flex: 1; display: grid; gap: 10px; align-content: start; }
+  .eb-hit { border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; background: var(--bg); }
+  .eb-meta { display: flex; gap: 6px; align-items: baseline; font-size: 12px; margin-bottom: 4px; min-width: 0; }
+  .eb-kind { flex: none; font-family: var(--mono); font-size: 10px; text-transform: uppercase; letter-spacing: .05em; padding: 1px 5px; border-radius: 4px; background: var(--accent-soft); color: var(--accent); }
+  .eb-meta a, .eb-meta span.eb-where { font-family: var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .eb-hit pre { margin: 0; font-family: var(--mono); font-size: 11.5px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; max-height: 12.5em; overflow: auto; color: var(--text); }
+  .eb-hit mark { background: #fde9a8; color: inherit; border-radius: 2px; }
+  .eb-ln { color: var(--faint); user-select: none; }
+  @media (max-width: 520px) { .eb { right: 12px; bottom: 12px; } .eb-fab-label { display: none; } }
+</style>
+
+<script is:inline>
+  (function () {
+    const root = document.querySelector('.eb');
+    if (!root) return;
+    const BASE = root.dataset.base, REPO = root.dataset.repo, BRANCH = root.dataset.branch;
+    const fab = root.querySelector('.eb-fab'), panel = root.querySelector('.eb-panel');
+    const input = root.querySelector('.eb-form input'), status = root.querySelector('.eb-status'), list = root.querySelector('.eb-results');
+    const zh = () => document.documentElement.dataset.lang !== 'en';
+    let IDX = null, DOCS = null, DF = null, AVG = 0, loading = null;
+
+    function tokens(s) {
+      s = s.toLowerCase();
+      const out = [];
+      for (const m of s.matchAll(/[a-z0-9]+(?:[._-][a-z0-9]+)*/g)) {
+        out.push(m[0]);
+        const parts = m[0].split(/[._-]/);
+        if (parts.length > 1) out.push(...parts.filter((p) => p.length > 1));
+      }
+      for (const run of s.matchAll(/[㐀-鿿]+/g)) {
+        const r = run[0];
+        for (let i = 0; i < r.length; i++) { out.push(r[i]); if (i + 1 < r.length) out.push(r.slice(i, i + 2)); }
+      }
+      return out;
+    }
+
+    function load() {
+      if (loading) return loading;
+      status.textContent = zh() ? '正在载入索引……' : 'Loading index…';
+      loading = fetch(`${BASE}/search-index.json`).then((r) => r.json()).then((j) => {
+        IDX = j;
+        DOCS = IDX.chunks.map((c) => {
+          const tf = new Map(); const toks = tokens(c[4] + ' ' + IDX.files[c[0]]);
+          for (const t of toks) tf.set(t, (tf.get(t) || 0) + 1);
+          return { c, tf, len: toks.length };
+        });
+        DF = new Map(); let total = 0;
+        for (const d of DOCS) { total += d.len; for (const t of d.tf.keys()) DF.set(t, (DF.get(t) || 0) + 1); }
+        AVG = total / DOCS.length;
+        status.textContent = zh() ? `已载入 ${IDX.files.length} 个文件、${IDX.chunks.length} 个片段。` : `${IDX.files.length} files, ${IDX.chunks.length} passages loaded.`;
+      }).catch(() => { status.textContent = zh() ? '索引载入失败。' : 'Failed to load the index.'; loading = null; });
+      return loading;
+    }
+
+    function search(q) {
+      const qt = [...new Set(tokens(q))], N = DOCS.length, k1 = 1.2, b = 0.75, scored = [];
+      for (const d of DOCS) {
+        let s = 0;
+        for (const t of qt) {
+          const f = d.tf.get(t); if (!f) continue;
+          const df = DF.get(t), idf = Math.log(1 + (N - df + 0.5) / (df + 0.5));
+          s += idf * (f * (k1 + 1)) / (f + k1 * (1 - b + b * d.len / AVG));
+        }
+        if (s > 0) scored.push([s, d]);
+      }
+      scored.sort((a, b) => b[0] - a[0]);
+      return { qt, hits: scored.slice(0, 8) };
+    }
+
+    const esc = (s) => s.replace(/[&<>]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[ch]));
+    function highlight(line, qt) {
+      const words = qt.filter((t) => t.length > 1 || /[㐀-鿿]/.test(t)).sort((a, b) => b.length - a.length);
+      const h = esc(line);
+      if (!words.length) return h;
+      const re = new RegExp('(' + words.map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|') + ')', 'gi');
+      return h.replace(re, '<mark>$1</mark>');
+    }
+
+    async function run(q) {
+      await load(); if (!IDX) return;
+      list.innerHTML = '';
+      if (!q.trim()) return;
+      const { qt, hits } = search(q);
+      status.textContent = hits.length ? (zh() ? `最相关的 ${hits.length} 段原文：` : `Top ${hits.length} passages:`) : (zh() ? '没有找到，换个说法试试。' : 'Nothing found; try other words.');
+      const kinds = { report: ['报告', 'report'], log: ['日志', 'log'], data: ['数据', 'data'], doc: ['文档', 'notes'], code: ['代码', 'code'] };
+      for (const [, d] of hits) {
+        const [fi, s, e, kind, text] = d.c, path = IDX.files[fi], where = `${path}:${s}–${e}`;
+        const url = REPO ? `${REPO}/blob/${BRANCH}/${encodeURI(path)}#L${s}-L${e}` : null;
+        const li = document.createElement('li'); li.className = 'eb-hit';
+        li.innerHTML = `<div class="eb-meta"><span class="eb-kind">${(kinds[kind] || [kind, kind])[zh() ? 0 : 1]}</span>` +
+          (url ? `<a href="${url}" target="_blank" rel="noopener" title="${esc(where)}">${esc(where)}</a>` : `<span class="eb-where">${esc(where)}</span>`) +
+          `</div><pre>${text.split('\n').map((l, i) => `<span class="eb-ln">${String(s + i).padStart(4, ' ')} </span>${highlight(l, qt)}`).join('\n')}</pre>`;
+        list.appendChild(li);
+      }
+    }
+
+    function toggle(open) {
+      panel.hidden = !open; fab.setAttribute('aria-expanded', String(open));
+      if (open) { load(); setTimeout(() => input.focus(), 0); }
+    }
+    fab.addEventListener('click', () => toggle(panel.hidden));
+    root.querySelector('.eb-close').addEventListener('click', () => toggle(false));
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !panel.hidden) toggle(false); });
+    root.querySelector('.eb-form').addEventListener('submit', (e) => { e.preventDefault(); run(input.value); });
+  })();
+</script>
