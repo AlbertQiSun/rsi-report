@@ -36,6 +36,23 @@ def tex_escape(s):
     return re.sub(r"\*+", "", s)
 
 
+CJK = re.compile(r"[\u3000-\u303f\u4e00-\u9fff]")
+OVERRIDE = {"X-24": "Weco AI. First evidence of recursive self-improvement. Company blog, 2026",
+            "S-10": "inclusionAI. Ling-3.0-flash model card and config. Hugging Face, 2026 (self-reported)"}
+
+
+def english(s):
+    """Make a bibliography string ASCII-punctuated and drop Chinese annotations kept in the web report."""
+    for a_, b_ in [("（", " ("), ("）", ")"), ("，", ", "), ("；", "; "), ("：", ": "), ("、", ", "), ("。", ". "), ("“", '"'), ("”", '"')]:
+        s = s.replace(a_, b_)
+    def paren(m):
+        parts = [x.strip() for x in re.split(r";", m.group(1)) if x.strip() and not CJK.search(x)]
+        return f" ({'; '.join(parts)})" if parts else ""
+    s = re.sub(r"\s*\(([^()]*)\)", paren, s)
+    s = ". ".join(y for y in ("; ".join(z for z in x.split("; ") if not CJK.search(z)) for x in s.split(". ")) if y)
+    return re.sub(r"\s+", " ", s).strip().rstrip(".")
+
+
 ENTRIES = {}
 for r in refs:
     k = skey(r["key"])
@@ -52,7 +69,8 @@ for r in refs:
         url = (REPO_URL + r["src"] + (f"#L{r['line']}" if r.get("line") else "")) if r.get("src") else None
         ENTRIES[k] = {"text": text, "url": url, "about": r["en"]}
     else:
-        ENTRIES[k] = {"text": tex_escape(r["en"]), "url": r["urls"][0] if r["urls"] else None, "about": r["en"]}
+        text = OVERRIDE.get(r["key"]) or english(r["en"])
+        ENTRIES[k] = {"text": tex_escape(text), "url": r["urls"][0] if r["urls"] else None, "about": text}
 
 if len(sys.argv) > 1 and sys.argv[1] == "keys":
     lines = ["# Citable keys for report/pdf/main.tex", "", "Use \\cite{KEY}. Ledger keys of the four releases collapse to REL-RF / REL-FL / REL-NV / REL-AX.", ""]

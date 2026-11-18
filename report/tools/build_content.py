@@ -305,6 +305,8 @@ LIST_RE = re.compile(r"^(-|\d+\.)\s+")
 def blocks(body):
     """Paragraphs and pipe tables -> list of {type, html|head|rows, pending}."""
     out = []
+    # a figure marker always stands on its own, even when no blank line separates it from the text
+    body = re.sub(r"[ \t]*(\[\[figure:[\w-]+｜.*?\]\](?!\]))[ \t]*", r"\n\n\1\n\n", body, flags=re.S)
     for chunk in re.split(r"\n\s*\n", body.strip()):
         lines = [l.strip() for l in chunk.strip().splitlines() if l.strip()]
         if not lines:
@@ -414,9 +416,19 @@ content = {
         "en": with_svg(blocks(abs_part("en")), "en"),
     },
     "cards": {"zh": zh_cards, "en": en_cards},
-    "sections": {str(n): t for n in range(1, 8) if (t := section_text(n))},
+    "sections": {str(n): t for n in range(1, 7) if (t := section_text(n))},
     "refs": REFS.entries(),
 }
+
+# ---------- figure numbers follow page order (captions may carry stale numbers after edits) ----------
+for lang, pat, word in (("zh", r"^图\s*\d+[　\s]*", "图 {}　"), ("en", r"^Figure\s*\d+\.?\s*", "Figure {}. ")):
+    k = 0
+    for n in sorted(content["sections"], key=int):
+        for b in content["sections"][n][lang]:
+            if b["type"] == "figure":
+                k += 1
+                b["html"] = re.sub(pat, "", b["html"])
+                b["html"] = word.format(k) + b["html"]
 
 # ---------- full plain-text report (report/report_full.md), always regenerated ----------
 def md_cites(raw):
@@ -435,9 +447,9 @@ def raw_section(n, lang):
     body = sec[zh.end():en.start()] if lang == "zh" else sec[en.end():]
     return body.strip()
 
-SEC_TITLES = {1: ("什么才算 RSI", "What counts as RSI"), 2: ("四份材料", "The four releases"), 3: ("没人测过的一环", "The missing measurement"),
-              4: ("实验：换上后继模型", "Experiment: swapping in the successor"), 5: ("与文献对照", "Against the literature"), 6: ("给 Ling 的计划", "A plan for Ling"),
-              7: ("写在最后（补充分析）", "Afterword (supplementary analysis)")}
+SEC_TITLES = {1: ("什么才算 RSI", "What counts as RSI"), 2: ("公开报告", "The public reports"), 3: ("跨代测量缺口", "The cross-generation measurement gap"),
+              4: ("后继模型的改进速度", "Successor improvement speed"), 5: ("相关研究的测量视角", "Measurement in related work"), 6: ("Ling 的研究方向", "A research direction for Ling"),
+              }
 full = ["<!-- 此文件由 report/tools/build_content.py 自动生成，请勿直接修改。改 report/draft.md（摘要）或 report/sections/*.md（各节），再运行构建。 -->", "",
         "# Recursive Self-Improvement in AI: A Survey of Claims, Evidence, and Empirical Tests", "", "孙祺（Qi Sun）", "", "## 中文", "", "### 摘要", "", md_cites(abs_part("zh"))]
 for n, (zt, et) in SEC_TITLES.items():
