@@ -174,7 +174,37 @@ class Refs:
             else:
                 out.append({"n": i, "key": k, "zh": k, "en": k, "note": "未登记的出处，请核对", "urls": [], "loc": loc,
                             "group": "data", "src": None, "line": None, "jumps": []})
+        for e in out:
+            e["line"] = repo_line(e["src"], e["line"])
+            for j in e["jumps"]:
+                j["line"] = repo_line(e["src"], j["line"])
         return out
+
+
+# Line numbers must match the published repository, which carries a few redacted files (e.g. cluster names
+# removed from REPORT_LOG.md). When the publish checkout exists, every recorded line is re-anchored to the
+# same text in that copy.
+PUB = ROOT / "publish" / "rsi-report-public"
+
+
+def repo_line(path, line):
+    if not (path and line and PUB.exists()):
+        return line
+    loc, pub = ROOT / path, PUB / path
+    if not (loc.exists() and pub.exists()) or loc.suffix not in (".md", ".txt", ".json", ".jsonl"):
+        return line
+    a, b = loc.read_text().splitlines(), pub.read_text().splitlines()
+    if line > len(a):
+        return line
+    text = a[line - 1]
+    if line <= len(b) and b[line - 1] == text:
+        return line
+    hits = [i for i, l in enumerate(b, 1) if l == text]
+    if hits:
+        return min(hits, key=lambda i: abs(i - line))
+    import difflib
+    best = difflib.get_close_matches(text, b, n=1, cutoff=0.6)
+    return (b.index(best[0]) + 1) if best else line
 
 
 def locate(path, what):

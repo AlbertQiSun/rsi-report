@@ -44,3 +44,6 @@ research/sources/img/
 
 # Local logs
 flint-int4-lfs-pull.log
+
+# generated at build time
+report/site/public/search-index.json

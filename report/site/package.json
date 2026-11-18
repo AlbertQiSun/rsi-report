@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "content": "python3 ../tools/make_section2_figs.py && python3 ../tools/make_section3_figs.py && python3 ../tools/make_abstract_fig.py && python3 ../tools/make_section4_figs.py && python3 ../tools/make_section4_flow.py && python3 ../tools/make_section5_figs.py && python3 ../tools/make_section6_figs.py && python3 ../tools/build_content.py",
+    "content": "python3 ../tools/make_section2_figs.py && python3 ../tools/make_section3_figs.py && python3 ../tools/make_abstract_fig.py && python3 ../tools/make_section4_figs.py && python3 ../tools/make_section4_flow.py && python3 ../tools/make_section5_figs.py && python3 ../tools/make_section6_figs.py && python3 ../tools/build_content.py && python3 ../tools/build_search_index.py",
     "dev": "npm run content && astro dev",
     "build": "npm run content && astro build",
     "preview": "astro preview"

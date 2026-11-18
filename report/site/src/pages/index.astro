@@ -2,7 +2,7 @@
 import Base from '../layouts/Base.astro';
 import content from '../data/content.json';
 
-// Section order follows report/draft.md (方案甲). Only section 0 has text so far.
+// Section order of the report. Text comes from report/sections/NN_*.md via tools/build_content.py.
 const sections = [
   { id: 'abstract', num: '00', zh: '摘要', en: 'Abstract' },
   { id: 'definition', num: '01', zh: '什么才算 RSI', en: 'What counts as RSI' },
@@ -40,7 +40,7 @@ const negIdx = new Set([1, 2]); // cards whose headline number is a negative res
 // ---- references: short keys, readable URLs, repository links ----
 // Set PUBLIC_REPO_URL (e.g. https://github.com/<user>/<repo>) and optionally PUBLIC_REPO_BRANCH at build time;
 // every internal file then links to its exact line in the repository.
-const REPO = (import.meta.env.PUBLIC_REPO_URL || '').replace(/\/$/, '');
+const REPO = (import.meta.env.PUBLIC_REPO_URL ?? 'https://github.com/AlbertQiSun/rsi-report').replace(/\/$/, '');
 const BRANCH = import.meta.env.PUBLIC_REPO_BRANCH || 'main';
 const repoLink = (src, line) => (REPO && src ? `${REPO}/blob/${BRANCH}/${src.split('/').map(encodeURIComponent).join('/')}${line ? `#L${line}` : ''}` : '');
 const shortKey = (k) => (k.includes('/') || /\.(md|json|jsonl|txt)$/.test(k) ? k.split('/').pop() : k);
@@ -58,6 +58,7 @@ const refGroups = [
       <a class="brand" href="#top">RSI Report</a>
       <nav class="global-nav" aria-label="Primary">
         {navTop.map((n) => <a href={`#${n.id}`}><span data-l="zh">{n.zh}</span><span data-l="en">{n.en}</span></a>)}
+        <a href={`${import.meta.env.BASE_URL.replace(/\/$/, '')}/search/`}><span data-l="zh">证据检索</span><span data-l="en">Search</span></a>
       </nav>
       <div class="lang" role="group" aria-label="Language">
         <button type="button" data-set-lang="zh" aria-pressed="true">中文</button>
@@ -267,8 +268,8 @@ const refGroups = [
 
   <footer class="site">
     <div class="col">
-      <span data-l="zh">本页由 report/tools/build_content.py 从 report/draft.md 生成；卡片上的数字由脚本从实验数据计算。</span>
-      <span data-l="en">Generated from report/draft.md by report/tools/build_content.py; card figures are computed from the experiment data.</span>
+      <span data-l="zh">本页由 report/tools/build_content.py 从 report/sections/ 下的各节文件生成；卡片上的数字由脚本从实验数据计算。</span>
+      <span data-l="en">Generated from the section files in report/sections/ by report/tools/build_content.py; card figures are computed from the experiment data.</span>
     </div>
   </footer>
 </Base>
